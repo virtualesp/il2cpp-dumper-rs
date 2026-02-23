@@ -372,6 +372,14 @@ fn run() -> Result<()> {
         println!("script.json, il2cpp.h, stringliteral.json generated");
     }
 
+    if config.generate_dummy_dll {
+        println!("Generating dummy dll...");
+        il2cpp_dumper::output::dummy_assembly_generator::generate_dummy_dlls(
+            &mut executor, &mut metadata, &mut il2cpp, &config, &cli.output_dir,
+        )?;
+        println!("Dummy dll files generated");
+    }
+
     println!("Done!");
 
     if config.require_any_key {
