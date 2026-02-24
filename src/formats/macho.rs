@@ -320,7 +320,7 @@ impl MachO {
         for sect in &self.sections {
             if addr >= sect.addr && addr <= sect.addr + sect.size {
                 if sect.sectname == "__bss" {
-                    return Err(Error::Other("Cannot map __bss section address".into()));
+                    continue;
                 }
                 return Ok(addr - sect.addr + sect.offset as u64);
             }

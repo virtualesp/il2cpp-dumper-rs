@@ -69,18 +69,32 @@ impl StructGenerator {
         output_dir: &str,
     ) -> Result<()> {
         let output_path = Path::new(output_dir);
-        Self::write_script_json(executor, metadata, il2cpp, &output_path.join("script.json"))?;
-        Self::write_string_literal_json(metadata, &output_path.join("stringliteral.json"))?;
-        Self::write_header(executor, metadata, il2cpp, &output_path.join("il2cpp.h"))?;
+
+        let script_json = Self::build_script_json(executor, metadata, il2cpp)?;
+        let string_literal_json = Self::build_string_literal_json(metadata)?;
+        let header = Self::build_header(executor, metadata, il2cpp)?;
+
+        use rayon::prelude::*;
+        let writes: Vec<(&str, &[u8])> = vec![
+            ("script.json", script_json.as_bytes()),
+            ("stringliteral.json", string_literal_json.as_bytes()),
+            ("il2cpp.h", header.as_bytes()),
+        ];
+        writes.par_iter().for_each(|(name, data)| {
+            let path = output_path.join(name);
+            if let Err(e) = fs::write(&path, data) {
+                eprintln!("WARNING: Failed to write {name}: {e}");
+            }
+        });
+
         Ok(())
     }
 
-    fn write_script_json(
+    fn build_script_json(
         executor: &mut Il2CppExecutor,
         metadata: &mut Metadata,
         il2cpp: &mut Il2Cpp,
-        path: &Path,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let mut script = ScriptJson::new();
         let mut addresses_set: HashSet<u64> = HashSet::new();
         let mut method_info_cache: HashSet<u64> = HashSet::new();
@@ -164,8 +178,7 @@ impl StructGenerator {
         script.addresses = sorted_addresses;
 
         let json = script.to_json().map_err(|e| crate::error::Error::Other(e.to_string()))?;
-        fs::write(path, json)?;
-        Ok(())
+        Ok(json)
     }
 
     fn collect_all_addresses(
@@ -817,7 +830,7 @@ impl StructGenerator {
         writeln!(buf, "}};").ok();
     }
 
-    fn write_string_literal_json(metadata: &mut Metadata, path: &Path) -> Result<()> {
+    fn build_string_literal_json(metadata: &mut Metadata) -> Result<String> {
         let mut entries = Vec::new();
         for i in 0..metadata.string_literals.len() {
             if let Ok(value) = metadata.get_string_literal_from_index(i) {
@@ -826,22 +839,20 @@ impl StructGenerator {
         }
         let json = serde_json::to_string_pretty(&entries)
             .map_err(|e| crate::error::Error::Other(e.to_string()))?;
-        fs::write(path, json)?;
-        Ok(())
+        Ok(json)
     }
 
-    fn write_header(
+    fn build_header(
         executor: &mut Il2CppExecutor,
         metadata: &mut Metadata,
         il2cpp: &mut Il2Cpp,
-        path: &Path,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let version = il2cpp.version;
         let version_header = match header_constants::get_version_header(version) {
             Some(h) => h,
             None => {
                 eprintln!("WARNING: IL2CPP version [{version}] does not support generating .h files");
-                return Ok(());
+                return Ok(String::new());
             }
         };
 
@@ -1042,8 +1053,7 @@ impl StructGenerator {
         buf.push_str(&array_class_header);
         buf.push_str(&method_info_header);
 
-        fs::write(path, buf)?;
-        Ok(())
+        Ok(buf)
     }
 
     fn add_parent(

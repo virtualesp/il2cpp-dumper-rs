@@ -48,6 +48,40 @@ fn read_magic_u16(data: &[u8]) -> u16 {
     u16::from_le_bytes([data[0], data[1]])
 }
 
+fn detect_unity_version(data: &[u8]) -> Option<String> {
+    let mut best: Option<String> = None;
+    let mut i = 0;
+    while i + 12 < data.len() {
+        if data[i] == b'2' && data[i + 1] == b'0'
+            && data[i + 2].is_ascii_digit() && data[i + 3].is_ascii_digit()
+            && data[i + 4] == b'.'
+            && data[i + 5].is_ascii_digit()
+        {
+            let max_len = std::cmp::min(24, data.len() - i);
+            let end = data[i..i + max_len].iter().position(|&b| {
+                !b.is_ascii_alphanumeric() && b != b'.'
+            }).unwrap_or(max_len);
+            let candidate = &data[i..i + end];
+            if candidate.len() >= 8 && candidate.len() <= 20 {
+                if let Ok(s) = std::str::from_utf8(candidate) {
+                    if s.chars().filter(|c| *c == '.').count() == 2
+                        && (s.contains('f') || s.contains('b') || s.contains('a') || s.contains('p'))
+                        && s.ends_with(|c: char| c.is_ascii_digit())
+                    {
+                        if best.as_ref().map_or(true, |prev| s > prev.as_str()) {
+                            best = Some(s.to_string());
+                        }
+                    }
+                }
+            }
+            i += end.max(1);
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
+
 fn prompt_dump_address() -> Option<u64> {
     print!("Input il2cpp dump address or input 0 to force continue: ");
     io::stdout().flush().ok();
@@ -463,6 +497,11 @@ fn run() -> Result<()> {
 
     println!("Initializing IL2CPP binary...");
     let il2cpp_bytes = fs::read(&cli.il2cpp_binary)?;
+
+    if let Some(unity_ver) = detect_unity_version(&il2cpp_bytes) {
+        println!("Unity Version: {unity_ver}");
+    }
+
     let format = detect_format(&il2cpp_bytes);
 
     let mut il2cpp = match format {

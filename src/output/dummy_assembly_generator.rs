@@ -161,6 +161,7 @@ pub fn generate_dummy_dlls(
     let types_all = il2cpp.types.clone();
     let _version = metadata.version;
 
+    let mut dll_outputs: Vec<(String, Vec<u8>)> = Vec::new();
     let mut global_type_map: HashMap<usize, (usize, usize)> = HashMap::new();
 
     for (img_idx, image_def) in image_defs.iter().enumerate() {
@@ -803,18 +804,23 @@ pub fn generate_dummy_dlls(
             format!("{image_name}.dll")
         };
 
-        let dll_path = dummy_dir.join(&dll_name);
         match resolution.write(Default::default()) {
             Ok(bytes) => {
-                if let Err(e) = fs::write(&dll_path, &bytes) {
-                    eprintln!("WARNING: Failed to write {dll_name}: {e}");
-                }
+                dll_outputs.push((dll_name, bytes));
             }
             Err(e) => {
                 eprintln!("WARNING: Failed to serialize {dll_name}: {e:?}");
             }
         }
     }
+
+    use rayon::prelude::*;
+    dll_outputs.par_iter().for_each(|(name, bytes)| {
+        let dll_path = dummy_dir.join(name);
+        if let Err(e) = fs::write(&dll_path, bytes) {
+            eprintln!("WARNING: Failed to write {name}: {e}");
+        }
+    });
 
     generate_il2cpp_dummy_dll(&dummy_dir)?;
 
