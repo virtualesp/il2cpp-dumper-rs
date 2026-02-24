@@ -110,6 +110,15 @@ pub fn parse_fat(data: &[u8]) -> Result<Vec<FatArch>> {
     Ok(arches)
 }
 
+pub fn extract_fat_slice(data: &[u8], arch: &FatArch) -> Result<Vec<u8>> {
+    let start = arch.offset as usize;
+    let end = start + arch.size as usize;
+    if end > data.len() {
+        return Err(Error::InvalidFormat("Fat slice extends beyond file".into()));
+    }
+    Ok(data[start..end].to_vec())
+}
+
 pub struct MachO {
     pub stream: BinaryStream,
     pub is_32bit: bool,

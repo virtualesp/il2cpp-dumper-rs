@@ -16,6 +16,7 @@ use il2cpp_dumper::formats::elf::Elf;
 use il2cpp_dumper::formats::pe::Pe;
 use il2cpp_dumper::formats::macho::MachO;
 use il2cpp_dumper::formats::nso::Nso;
+use il2cpp_dumper::formats::wasm::Wasm;
 
 const MAGIC_METADATA: u32 = 0xFAB11BAF;
 const MAGIC_ELF: u32 = 0x464C457F;
@@ -24,6 +25,7 @@ const MAGIC_MACHO32: u32 = 0xFEEDFACE;
 const MAGIC_MACHO64: u32 = 0xFEEDFACF;
 const MAGIC_MACHOFAT: u32 = 0xBEBAFECA;
 const MAGIC_NSO: u32 = 0x304F534E;
+const MAGIC_WASM: u32 = 0x6D736100;
 
 #[derive(Parser)]
 #[command(name = "il2cpp_dumper", version, about = "IL2CPP Dumper - Rust Port")]
@@ -100,6 +102,9 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
         if let Some(addr) = prompt_dump_address() {
             elf.stream.image_base = addr;
             elf.is_dumped = true;
+            if !config.no_redirected_pointer {
+                elf.load()?;
+            }
         }
     }
 
@@ -221,6 +226,30 @@ fn init_pe(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp
     il2cpp.image_base = pe_image_base;
     il2cpp.init(cr_addr, mr_addr, &|addr| pe.map_vatr(addr))?;
     Ok(il2cpp)
+}
+
+fn init_macho_fat(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
+    use il2cpp_dumper::formats::macho::{parse_fat, extract_fat_slice, MH_MAGIC_64};
+
+    let arches = parse_fat(&data)?;
+    println!("Detected Fat Mach-O with {} architectures", arches.len());
+
+    print!("Select Platform: ");
+    for (i, arch) in arches.iter().enumerate() {
+        if arch.magic == MH_MAGIC_64 {
+            print!("{}.64bit ", i + 1);
+        } else {
+            print!("{}.32bit ", i + 1);
+        }
+    }
+    println!();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let index = input.trim().parse::<usize>().unwrap_or(1).saturating_sub(1) % arches.len();
+
+    let slice = extract_fat_slice(&data, &arches[index])?;
+    init_macho(slice, metadata, config)
 }
 
 fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
@@ -346,13 +375,53 @@ fn init_nso(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
     Ok(il2cpp)
 }
 
+fn init_wasm(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
+    println!("Detected WASM format");
+
+    let wasm = Wasm::new(data)?;
+
+    let version = if config.force_il2cpp_version {
+        config.force_version
+    } else {
+        metadata.version
+    };
+
+    println!("IL2CPP Version: {version}");
+
+    println!("Searching...");
+    let method_count = metadata.method_defs.iter().filter(|m| m.method_index >= 0).count();
+    let type_count = metadata.type_defs.len();
+    let image_count = metadata.image_defs.len();
+    let mu_count = metadata.metadata_usages_count;
+
+    let mut helper = wasm.get_section_helper(method_count, type_count, mu_count, image_count, version);
+    let code_reg = helper.find_code_registration();
+    let metadata_reg = helper.find_metadata_registration();
+
+    let (cr_addr, mr_addr) = if let (Some(cr), Some(mr)) = (code_reg, metadata_reg) {
+        (cr, mr)
+    } else {
+        println!("ERROR: Can't use auto mode to process file, try manual mode.");
+        prompt_manual_addresses()?
+    };
+
+    let stream_len = wasm.stream.data()
+    .len() as u64;
+    let mut il2cpp = Il2Cpp::new(wasm.stream.clone(), version, wasm.is_32bit);
+    il2cpp.va_segments = vec![VaSegment { vaddr: 0, memsz: stream_len, offset: 0 }];
+    il2cpp.init(cr_addr, mr_addr, &|addr| wasm.map_vatr(addr))?;
+    Ok(il2cpp)
+}
+
 fn detect_format(data: &[u8]) -> &'static str {
     let magic32 = read_magic_u32(data);
     let magic16 = read_magic_u16(data);
     match magic32 {
         MAGIC_ELF => "elf",
-        MAGIC_MACHO32 | MAGIC_MACHO64 | MAGIC_MACHOFAT => "macho",
+        MAGIC_MACHO32 | MAGIC_MACHO64 => "macho",
+        MAGIC_MACHOFAT => "macho_fat",
         MAGIC_NSO => "nso",
+        MAGIC_WASM => "wasm",
         _ if magic16 == MAGIC_PE => "pe",
         _ => "unknown",
     }
@@ -400,7 +469,9 @@ fn run() -> Result<()> {
         "elf" => init_elf(il2cpp_bytes, &metadata, &config)?,
         "pe" => init_pe(il2cpp_bytes, &metadata, &config)?,
         "macho" => init_macho(il2cpp_bytes, &metadata, &config)?,
+        "macho_fat" => init_macho_fat(il2cpp_bytes, &metadata, &config)?,
         "nso" => init_nso(il2cpp_bytes, &metadata, &config)?,
+        "wasm" => init_wasm(il2cpp_bytes, &metadata, &config)?,
         _ => {
             let magic = read_magic_u32(&il2cpp_bytes);
             return Err(il2cpp_dumper::error::Error::Other(
@@ -408,6 +479,17 @@ fn run() -> Result<()> {
             ));
         }
     };
+
+    if il2cpp.version >= 27.0 && il2cpp.is_dumped {
+        if let Some(type_def) = metadata.type_defs.first() {
+            let byval_idx = type_def.byval_type_index as usize;
+            if byval_idx < il2cpp.types.len() {
+                let il2cpp_type = &il2cpp.types[byval_idx];
+                let type_handle = il2cpp_type.type_handle();
+                il2cpp.image_base = type_handle.wrapping_sub(metadata.header.type_definitions_offset as u64);
+            }
+        }
+    }
 
     println!("Dumping...");
     let mut executor = Il2CppExecutor::new(&metadata, &mut il2cpp)?;

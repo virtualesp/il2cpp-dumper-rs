@@ -172,7 +172,7 @@ impl Elf {
         Ok(elf)
     }
 
-    fn load(&mut self) -> Result<()> {
+    pub fn load(&mut self) -> Result<()> {
         self.read_header()?;
         self.read_program_headers()?;
 
