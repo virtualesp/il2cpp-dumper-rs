@@ -1,9 +1,11 @@
 use std::fs;
-use std::io::{self, Write, BufRead};
 use std::process;
 use std::time::Instant;
 
 use clap::Parser;
+use console::{style, Emoji};
+use dialoguer::{Input, Select};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use il2cpp_dumper::config::Config;
 use il2cpp_dumper::error::Result;
@@ -27,6 +29,22 @@ const MAGIC_MACHOFAT: u32 = 0xBEBAFECA;
 const MAGIC_NSO: u32 = 0x304F534E;
 const MAGIC_WASM: u32 = 0x6D736100;
 
+static SPARKLE: Emoji<'_, '_> = Emoji("✨ ", "* ");
+static PACKAGE: Emoji<'_, '_> = Emoji("📦 ", "");
+static GEAR: Emoji<'_, '_> = Emoji("⚙️  ", "");
+static MAG: Emoji<'_, '_> = Emoji("🔍 ", "");
+static LOCK: Emoji<'_, '_> = Emoji("🔓 ", "");
+static SHIELD: Emoji<'_, '_> = Emoji("🛡️  ", "");
+static WARN: Emoji<'_, '_> = Emoji("⚠️  ", "! ");
+static FOLDER: Emoji<'_, '_> = Emoji("📂 ", "");
+static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
+
+const BANNER: &str = r#"
+  ╦╦  ╔═╗╔═╗╔═╗  ╔╦╗╦ ╦╔╦╗╔═╗╔═╗╦═╗
+  ║║  ╠═╝║  ╠═╝   ║║║ ║║║║╠═╝║╣ ╠╦╝
+  ╩╩═╝╚  ╚═╝╩    ═╩╝╚═╝╩ ╩╩  ╚═╝╩╚═
+"#;
+
 #[derive(Parser)]
 #[command(name = "il2cpp_dumper", version, about = "IL2CPP Dumper - Rust Port")]
 struct Cli {
@@ -36,6 +54,75 @@ struct Cli {
     output_dir: String,
     #[arg(long)]
     config: Option<String>,
+}
+
+fn spinner(msg: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {msg} {elapsed:.dim}")
+            .unwrap()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "✓"]),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+    pb
+}
+
+fn print_banner() {
+    let version = env!("CARGO_PKG_VERSION");
+    println!();
+    println!(
+        "  {} {}",
+        style("Rodroid").magenta().bold(),
+        style("Il2CppDumper").cyan().bold()
+    );
+    for line in BANNER.lines() {
+        println!("  {}", style(line).cyan().bold());
+    }
+    println!(
+        "  {}{}",
+        style("  Version").dim(),
+        style(format!(" v{version}")).magenta().bold()
+    );
+    println!(
+        "  {}",
+        style("─────────────────────────────────────").dim()
+    );
+    println!();
+}
+
+fn print_info(label: &str, value: &str) {
+    println!(
+        "  {} {}",
+        style(format!("{label}:")).green().bold(),
+        style(value).cyan()
+    );
+}
+
+fn print_address(label: &str, addr: u64) {
+    println!(
+        "  {} {}{}",
+        style(format!("{label}:")).green().bold(),
+        style("0x").dim(),
+        style(format!("{addr:x}")).yellow().bold()
+    );
+}
+
+fn print_warn(msg: &str) {
+    println!("  {} {}", WARN, style(msg).yellow());
+}
+
+fn print_success(msg: &str) {
+    println!("  {} {}", style("✓").green().bold(), style(msg).green());
+}
+
+fn print_detection(label: &str) {
+    println!(
+        "  {} {}{}",
+        MAG,
+        style("Detected ").dim(),
+        style(label).white().bold()
+    );
 }
 
 fn read_magic_u32(data: &[u8]) -> u32 {
@@ -185,43 +272,99 @@ fn detect_unity_version(data: &[u8]) -> Option<String> {
     best
 }
 
-fn prompt_dump_address() -> Option<u64> {
-    print!("Input il2cpp dump address or input 0 to force continue: ");
-    io::stdout().flush().ok();
-    let stdin = io::stdin();
-    if let Some(Ok(line)) = stdin.lock().lines().next() {
-        if let Ok(addr) = u64::from_str_radix(line.trim().trim_start_matches("0x"), 16) {
-            if addr != 0 {
-                return Some(addr);
-            }
-        }
+fn validate_hex(input: &String) -> std::result::Result<(), String> {
+    let trimmed = input.trim().trim_start_matches("0x").trim_start_matches("0X");
+    if trimmed.is_empty() {
+        return Err("Address cannot be empty".into());
     }
-    None
+    u64::from_str_radix(trimmed, 16)
+        .map(|_| ())
+        .map_err(|_| format!("'{}' is not a valid hex address", input))
+}
+
+fn parse_hex_input(input: &str) -> u64 {
+    let trimmed = input.trim().trim_start_matches("0x").trim_start_matches("0X");
+    u64::from_str_radix(trimmed, 16).unwrap_or(0)
+}
+
+fn prompt_dump_address() -> Option<u64> {
+    println!();
+    println!(
+        "  {} {}",
+        WARN,
+        style("This appears to be a memory dump file.").yellow().bold()
+    );
+    println!(
+        "  {}",
+        style("  Enter the il2cpp dump base address, or 0 to skip.").dim()
+    );
+    println!();
+
+    let input: String = Input::new()
+        .with_prompt(format!("  {} Dump base address (hex)", SHIELD))
+        .default("0".into())
+        .validate_with(validate_hex)
+        .interact_text()
+        .unwrap_or_else(|_| "0".into());
+
+    let addr = parse_hex_input(&input);
+    if addr != 0 {
+        Some(addr)
+    } else {
+        None
+    }
 }
 
 fn prompt_manual_addresses() -> Result<(u64, u64)> {
-    print!("Input CodeRegistration (hex): ");
-    io::stdout().flush().ok();
-    let stdin = io::stdin();
-    let cr_line = stdin.lock().lines().next()
-        .unwrap_or(Ok(String::new()))
-        .unwrap_or_default();
-    print!("Input MetadataRegistration (hex): ");
-    io::stdout().flush().ok();
-    let mr_line = stdin.lock().lines().next()
-        .unwrap_or(Ok(String::new()))
-        .unwrap_or_default();
+    println!();
+    println!(
+        "  {} {}",
+        style("✗").red().bold(),
+        style("Auto-detection failed. Manual input required.").red()
+    );
+    println!(
+        "  {}",
+        style("  Provide the registration addresses in hexadecimal.").dim()
+    );
+    println!();
 
-    let cr = u64::from_str_radix(cr_line.trim().trim_start_matches("0x"), 16)
-        .map_err(|_| il2cpp_dumper::error::Error::Other("Invalid code registration address".into()))?;
-    let mr = u64::from_str_radix(mr_line.trim().trim_start_matches("0x"), 16)
-        .map_err(|_| il2cpp_dumper::error::Error::Other("Invalid metadata registration address".into()))?;
+    let cr_input: String = Input::new()
+        .with_prompt(format!("  {} CodeRegistration (hex)", style("→").cyan()))
+        .validate_with(|input: &String| {
+            let trimmed = input.trim().trim_start_matches("0x").trim_start_matches("0X");
+            if trimmed.is_empty() || trimmed == "0" {
+                return Err("CodeRegistration address is required".to_string());
+            }
+            validate_hex(input)
+        })
+        .interact_text()
+        .map_err(|_| il2cpp_dumper::error::Error::Other("Failed to read CodeRegistration input".into()))?;
+
+    let mr_input: String = Input::new()
+        .with_prompt(format!("  {} MetadataRegistration (hex)", style("→").cyan()))
+        .validate_with(|input: &String| {
+            let trimmed = input.trim().trim_start_matches("0x").trim_start_matches("0X");
+            if trimmed.is_empty() || trimmed == "0" {
+                return Err("MetadataRegistration address is required".to_string());
+            }
+            validate_hex(input)
+        })
+        .interact_text()
+        .map_err(|_| il2cpp_dumper::error::Error::Other("Failed to read MetadataRegistration input".into()))?;
+
+    let cr = parse_hex_input(&cr_input);
+    let mr = parse_hex_input(&mr_input);
+    println!();
+    print_address("CodeRegistration", cr);
+    print_address("MetadataRegistration", mr);
+    println!();
+
     Ok((cr, mr))
 }
 
 fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
     let is_64 = data.len() > 4 && data[4] == 2;
-    println!("Detected ELF{} format", if is_64 { "64" } else { "32" });
+    print_detection(&format!("ELF{} format", if is_64 { "64" } else { "32" }));
 
     let mut elf = Elf::new(data, !is_64)?;
 
@@ -232,10 +375,9 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
     };
 
     elf.set_properties(version, metadata.metadata_usages_count as u64);
-    println!("IL2CPP Version: {}", elf.stream.version);
+    print_info("IL2CPP Version", &elf.stream.version.to_string());
 
     if config.force_dump || elf.check_dump() {
-        println!("Detected this may be a dump file.");
         if let Some(addr) = prompt_dump_address() {
             elf.stream.image_base = addr;
             elf.is_dumped = true;
@@ -245,7 +387,7 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
         }
     }
 
-    println!("Searching...");
+    let sp = spinner("Searching for registrations...");
     let method_count = metadata.method_defs.iter().filter(|m| m.method_index >= 0).count();
     let type_count = metadata.type_defs.len();
     let image_count = metadata.image_defs.len();
@@ -253,21 +395,22 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
     let mut helper = elf.get_section_helper(method_count, type_count, image_count);
     let code_reg = helper.find_code_registration();
     let metadata_reg = helper.find_metadata_registration();
+    sp.finish_and_clear();
 
     if let Some(cr) = code_reg {
-        println!("CodeRegistration : 0x{cr:x}");
+        print_address("CodeRegistration", cr);
     }
     if let Some(mr) = metadata_reg {
-        println!("MetadataRegistration : 0x{mr:x}");
+        print_address("MetadataRegistration", mr);
     }
 
     let mut found = elf.auto_plus_init(code_reg, metadata_reg)?;
 
     if !found {
         if let Ok(Some((cr, mr))) = elf.symbol_search() {
-            println!("Detected Symbol!");
-            println!("CodeRegistration : 0x{cr:x}");
-            println!("MetadataRegistration : 0x{mr:x}");
+            print_detection("Symbol table");
+            print_address("CodeRegistration", cr);
+            print_address("MetadataRegistration", mr);
             elf.init(cr, mr)?;
             found = true;
         }
@@ -275,16 +418,15 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
 
     if !found {
         if let Some((cr, mr)) = elf.search_arm32(version) {
-            println!("Found via ARM32 Search");
-            println!("CodeRegistration : 0x{cr:x}");
-            println!("MetadataRegistration : 0x{mr:x}");
+            print_detection("ARM32 search pattern");
+            print_address("CodeRegistration", cr);
+            print_address("MetadataRegistration", mr);
             elf.init(cr, mr)?;
             found = true;
         }
     }
 
     if !found {
-        println!("ERROR: Can't use auto mode to process file, try manual mode.");
         let (cr, mr) = prompt_manual_addresses()?;
         elf.init(cr, mr)?;
     }
@@ -294,7 +436,7 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
 
 fn init_pe(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
     let mut pe = Pe::new(data)?;
-    println!("Detected PE{} format", if pe.is_32bit { "32" } else { "64" });
+    print_detection(&format!("PE{} format", if pe.is_32bit { "32" } else { "64" }));
 
     let version = if config.force_il2cpp_version {
         config.force_version
@@ -304,16 +446,15 @@ fn init_pe(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp
 
     pe.stream.version = version;
     pe.stream.is_32bit = pe.is_32bit;
-    println!("IL2CPP Version: {version}");
+    print_info("IL2CPP Version", &version.to_string());
 
     if config.force_dump || pe.check_dump() {
-        println!("Detected this may be a dump file.");
         if let Some(addr) = prompt_dump_address() {
             pe.stream.image_base = addr;
         }
     }
 
-    println!("Searching...");
+    let sp = spinner("Searching for registrations...");
     let method_count = metadata.method_defs.iter().filter(|m| m.method_index >= 0).count();
     let type_count = metadata.type_defs.len();
     let image_count = metadata.image_defs.len();
@@ -323,9 +464,10 @@ fn init_pe(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp
     let mut mr_addr = 0u64;
 
     if let Ok(Some((cr, mr))) = pe.symbol_search() {
-        println!("Detected Symbol!");
-        println!("CodeRegistration : 0x{cr:x}");
-        println!("MetadataRegistration : 0x{mr:x}");
+        sp.finish_and_clear();
+        print_detection("Symbol table");
+        print_address("CodeRegistration", cr);
+        print_address("MetadataRegistration", mr);
         cr_addr = cr;
         mr_addr = mr;
     }
@@ -334,16 +476,18 @@ fn init_pe(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp
         let mut helper = pe.get_section_helper(method_count, type_count, mu_count, image_count, version);
         let code_reg = helper.find_code_registration();
         let metadata_reg = helper.find_metadata_registration();
+        sp.finish_and_clear();
         if let (Some(cr), Some(mr)) = (code_reg, metadata_reg) {
-            println!("CodeRegistration : 0x{cr:x}");
-            println!("MetadataRegistration : 0x{mr:x}");
+            print_address("CodeRegistration", cr);
+            print_address("MetadataRegistration", mr);
             cr_addr = cr;
             mr_addr = mr;
         }
+    } else {
+        sp.finish_and_clear();
     }
 
     if cr_addr == 0 || mr_addr == 0 {
-        println!("ERROR: Can't use auto mode to process file, try manual mode.");
         let (cr, mr) = prompt_manual_addresses()?;
         cr_addr = cr;
         mr_addr = mr;
@@ -375,30 +519,36 @@ fn init_macho_fat(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result
     use il2cpp_dumper::formats::macho::{parse_fat, extract_fat_slice, MH_MAGIC_64};
 
     let arches = parse_fat(&data)?;
-    println!("Detected Fat Mach-O with {} architectures", arches.len());
-
-    print!("Select Platform: ");
-    for (i, arch) in arches.iter().enumerate() {
-        if arch.magic == MH_MAGIC_64 {
-            print!("{}.64bit ", i + 1);
-        } else {
-            print!("{}.32bit ", i + 1);
-        }
-    }
+    print_detection(&format!("Fat Mach-O with {} architectures", arches.len()));
     println!();
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).ok();
-    let index = input.trim().parse::<usize>().unwrap_or(1).saturating_sub(1) % arches.len();
+    let items: Vec<String> = arches
+        .iter()
+        .enumerate()
+        .map(|(i, arch)| {
+            if arch.magic == MH_MAGIC_64 {
+                format!("{}. 64-bit", i + 1)
+            } else {
+                format!("{}. 32-bit", i + 1)
+            }
+        })
+        .collect();
 
-    let slice = extract_fat_slice(&data, &arches[index])?;
+    let selection = Select::new()
+        .with_prompt(format!("  {} Select target architecture", GEAR))
+        .items(&items)
+        .default(0)
+        .interact()
+        .unwrap_or(0);
+
+    let slice = extract_fat_slice(&data, &arches[selection])?;
     init_macho(slice, metadata, config)
 }
 
 fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
     let magic = read_magic_u32(&data);
     let is_64 = magic == MAGIC_MACHO64;
-    println!("Detected Mach-O{} format", if is_64 { " 64-bit" } else { " 32-bit" });
+    print_detection(&format!("Mach-O {} format", if is_64 { "64-bit" } else { "32-bit" }));
 
     let mut macho = MachO::new(data, !is_64)?;
 
@@ -409,9 +559,9 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
     };
 
     macho.stream.version = version;
-    println!("IL2CPP Version: {version}");
+    print_info("IL2CPP Version", &version.to_string());
 
-    println!("Searching...");
+    let sp = spinner("Searching for registrations...");
     let method_count = metadata.method_defs.iter().filter(|m| m.method_index >= 0).count();
     let type_count = metadata.type_defs.len();
     let image_count = metadata.image_defs.len();
@@ -421,18 +571,20 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
     let mut mr_addr = 0u64;
 
     if let Some((cr, mr)) = macho.symbol_search() {
-        println!("Detected Symbol!");
-        println!("CodeRegistration : 0x{cr:x}");
-        println!("MetadataRegistration : 0x{mr:x}");
+        sp.finish_and_clear();
+        print_detection("Symbol table");
+        print_address("CodeRegistration", cr);
+        print_address("MetadataRegistration", mr);
         cr_addr = cr;
         mr_addr = mr;
     }
 
     if cr_addr == 0 || mr_addr == 0 {
         if let Some((cr, mr)) = macho.search_mod_init_func(version) {
-            println!("Found via __mod_init_func search");
-            println!("CodeRegistration : 0x{cr:x}");
-            println!("MetadataRegistration : 0x{mr:x}");
+            sp.finish_and_clear();
+            print_detection("__mod_init_func section");
+            print_address("CodeRegistration", cr);
+            print_address("MetadataRegistration", mr);
             cr_addr = cr;
             mr_addr = mr;
         }
@@ -442,16 +594,18 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
         let mut helper = macho.get_section_helper(method_count, type_count, mu_count, image_count, version);
         let code_reg = helper.find_code_registration();
         let metadata_reg = helper.find_metadata_registration();
+        sp.finish_and_clear();
         if let (Some(cr), Some(mr)) = (code_reg, metadata_reg) {
-            println!("CodeRegistration : 0x{cr:x}");
-            println!("MetadataRegistration : 0x{mr:x}");
+            print_address("CodeRegistration", cr);
+            print_address("MetadataRegistration", mr);
             cr_addr = cr;
             mr_addr = mr;
         }
+    } else {
+        sp.finish_and_clear();
     }
 
     if cr_addr == 0 || mr_addr == 0 {
-        println!("ERROR: Can't use auto mode to process file, try manual mode.");
         let (cr, mr) = prompt_manual_addresses()?;
         cr_addr = cr;
         mr_addr = mr;
@@ -482,7 +636,7 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
 }
 
 fn init_nso(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
-    println!("Detected NSO format");
+    print_detection("NSO (Nintendo Switch) format");
 
     let nso = Nso::new(data)?;
 
@@ -492,9 +646,9 @@ fn init_nso(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
         metadata.version
     };
 
-    println!("IL2CPP Version: {version}");
+    print_info("IL2CPP Version", &version.to_string());
 
-    println!("Searching...");
+    let sp = spinner("Searching for registrations...");
     let method_count = metadata.method_defs.iter().filter(|m| m.method_index >= 0).count();
     let type_count = metadata.type_defs.len();
     let image_count = metadata.image_defs.len();
@@ -503,11 +657,13 @@ fn init_nso(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
     let mut helper = nso.get_section_helper(method_count, type_count, mu_count, image_count, version);
     let code_reg = helper.find_code_registration();
     let metadata_reg = helper.find_metadata_registration();
+    sp.finish_and_clear();
 
     let (cr_addr, mr_addr) = if let (Some(cr), Some(mr)) = (code_reg, metadata_reg) {
+        print_address("CodeRegistration", cr);
+        print_address("MetadataRegistration", mr);
         (cr, mr)
     } else {
-        println!("ERROR: Can't use auto mode to process file, try manual mode.");
         prompt_manual_addresses()?
     };
 
@@ -519,7 +675,7 @@ fn init_nso(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
 }
 
 fn init_wasm(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp> {
-    println!("Detected WASM format");
+    print_detection("WebAssembly (WASM) format");
 
     let wasm = Wasm::new(data)?;
 
@@ -529,9 +685,9 @@ fn init_wasm(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2C
         metadata.version
     };
 
-    println!("IL2CPP Version: {version}");
+    print_info("IL2CPP Version", &version.to_string());
 
-    println!("Searching...");
+    let sp = spinner("Searching for registrations...");
     let method_count = metadata.method_defs.iter().filter(|m| m.method_index >= 0).count();
     let type_count = metadata.type_defs.len();
     let image_count = metadata.image_defs.len();
@@ -540,16 +696,17 @@ fn init_wasm(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2C
     let mut helper = wasm.get_section_helper(method_count, type_count, mu_count, image_count, version);
     let code_reg = helper.find_code_registration();
     let metadata_reg = helper.find_metadata_registration();
+    sp.finish_and_clear();
 
     let (cr_addr, mr_addr) = if let (Some(cr), Some(mr)) = (code_reg, metadata_reg) {
+        print_address("CodeRegistration", cr);
+        print_address("MetadataRegistration", mr);
         (cr, mr)
     } else {
-        println!("ERROR: Can't use auto mode to process file, try manual mode.");
         prompt_manual_addresses()?
     };
 
-    let stream_len = wasm.stream.data()
-    .len() as u64;
+    let stream_len = wasm.stream.data().len() as u64;
     let mut il2cpp = Il2Cpp::new(wasm.stream.clone(), version, wasm.is_32bit);
     il2cpp.va_segments = vec![VaSegment { vaddr: 0, memsz: stream_len, offset: 0 }];
     il2cpp.init(cr_addr, mr_addr, &|addr| wasm.map_vatr(addr))?;
@@ -569,18 +726,37 @@ fn detect_format(data: &[u8]) -> &'static str {
         _ => "unknown",
     }
 }
+
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 fn run() -> Result<()> {
     let start_time = Instant::now();
     let cli = Cli::parse();
 
+    print_banner();
+
     let config = if let Some(config_path) = &cli.config {
         Config::load_from_file(config_path).unwrap_or_else(|e| {
-            eprintln!("Warning: Failed to load config from {}: {}", config_path, e);
+            print_warn(&format!("Failed to load config from {}: {}", config_path, e));
             Config::default()
         })
     } else if std::path::Path::new("config.json").exists() {
         Config::load_from_file("config.json").unwrap_or_else(|e| {
-            eprintln!("Warning: Failed to load config.json: {}", e);
+            print_warn(&format!("Failed to load config.json: {}", e));
             Config::default()
         })
     } else {
@@ -594,31 +770,78 @@ fn run() -> Result<()> {
     }
     let output_dir = base_dir.join(format!("Dump{dump_num}")).to_string_lossy().to_string();
     fs::create_dir_all(&output_dir).ok();
+    println!(
+        "  {}{} {}",
+        FOLDER,
+        style("Output").dim(),
+        style(&output_dir).white().bold().underlined()
+    );
+    println!();
 
-    println!("Initializing IL2CPP binary...\r");
+    println!(
+        "  {}",
+        style("─── Binary Analysis ───────────────────").dim()
+    );
+    println!();
+
+    let sp = spinner("Loading IL2CPP binary...");
     let il2cpp_bytes = fs::read(&cli.il2cpp_binary)?;
+    let binary_size = il2cpp_bytes.len() as u64;
+    sp.finish_and_clear();
+    print_success(&format!(
+        "Binary loaded: {} ({})",
+        style(&cli.il2cpp_binary).white().bold(),
+        style(format_file_size(binary_size)).cyan()
+    ));
 
     let unity_version_str = detect_unity_version(&il2cpp_bytes);
     if let Some(ref uv) = unity_version_str {
-        println!("Unity Version: {uv}");
+        print_info("Unity Version", uv);
     }
 
-    println!("Initializing metadata...\r");
+    let sp = spinner("Loading metadata...");
     let mut metadata_bytes = fs::read(&cli.metadata)?;
+    let metadata_size = metadata_bytes.len() as u64;
+    sp.finish_and_clear();
+    print_success(&format!(
+        "Metadata loaded: {} ({})",
+        style(&cli.metadata).white().bold(),
+        style(format_file_size(metadata_size)).cyan()
+    ));
+
     let metadata_magic = read_magic_u32(&metadata_bytes);
     if metadata_magic != MAGIC_METADATA {
         match try_decrypt_metadata(&mut metadata_bytes) {
-            Some(scheme) => println!("Encrypted metadata detected ({scheme}), decrypting..."),
+            Some(scheme) => {
+                println!(
+                    "  {} {}{}",
+                    LOCK,
+                    style("Decrypted metadata: ").dim(),
+                    style(&scheme).yellow().bold()
+                );
+            }
             None => return Err(il2cpp_dumper::error::Error::Other(
                 format!("Invalid metadata file (magic: 0x{metadata_magic:08X}). Encryption not recognized.")
             )),
         }
     }
+
+    let sp = spinner("Parsing metadata structures...");
     let mut metadata = Metadata::new_with_unity_version(
         metadata_bytes,
         unity_version_str.as_deref(),
     )?;
-    println!("Metadata Version: {}", metadata.version);
+    sp.finish_and_clear();
+    print_info("Metadata Version", &metadata.version.to_string());
+    print_info("Type Definitions", &format!("{}", metadata.type_defs.len()));
+    print_info("Method Definitions", &format!("{}", metadata.method_defs.len()));
+
+    println!();
+    println!(
+        "  {}",
+        style("─── Format Detection ──────────────────").dim()
+    );
+    println!();
 
     let format = detect_format(&il2cpp_bytes);
 
@@ -648,50 +871,111 @@ fn run() -> Result<()> {
         }
     }
 
-    println!("Dumping...");
+    println!();
+    println!(
+        "  {}",
+        style("─── Output Generation ─────────────────").dim()
+    );
+    println!();
+
+    let sp_dump = spinner("Generating dump.cs...");
     let mut executor = Il2CppExecutor::new(&metadata, &mut il2cpp)?;
 
     Il2CppDecompiler::decompile(&mut executor, &mut metadata, &mut il2cpp, &config, &output_dir, |msg| {
-        println!("{msg}");
+        sp_dump.set_message(msg.to_string());
     })?;
-    println!("dump.cs generated");
+    sp_dump.finish_and_clear();
+    print_success("dump.cs generated");
+
+    let mut generated_files: Vec<String> = vec!["dump.cs".into()];
 
     if config.generate_struct {
-        println!("Generating struct...");
+        let sp = spinner("Generating structs...");
         StructGenerator::write_all(&mut executor, &mut metadata, &mut il2cpp, &output_dir)?;
         il2cpp_dumper::output::embedded_scripts::write_scripts(std::path::Path::new(&output_dir))?;
-        println!("script.json, il2cpp.h, stringliteral.json generated");
+        sp.finish_and_clear();
+        print_success("script.json, il2cpp.h, stringliteral.json generated");
+        generated_files.extend(["script.json".into(), "il2cpp.h".into(), "stringliteral.json".into()]);
     }
 
     if config.generate_dummy_dll {
-        println!("Generating dummy dll...");
+        let sp = spinner("Generating dummy DLLs...");
         il2cpp_dumper::output::dummy_assembly_generator::generate_dummy_dlls(
             &mut executor, &mut metadata, &mut il2cpp, &config, &output_dir,
         )?;
-        println!("Dummy dll files generated");
+        sp.finish_and_clear();
+        print_success("Dummy DLL files generated");
+        generated_files.push("DummyDll/*.dll".into());
     }
 
     if config.generate_generics_dump {
-        println!("Generating generics dump...");
+        let sp = spinner("Generating generics dump...");
         let generics_path = std::path::Path::new(&output_dir).join("generics_dump.txt");
         if let Err(e) = il2cpp_dumper::output::generics::dump_generics(
             &generics_path.to_string_lossy(), &mut metadata, &mut il2cpp, &mut executor, &config
         ) {
-            eprintln!("Warning: Failed to generate generics_dump.txt: {}", e);
+            sp.finish_and_clear();
+            print_warn(&format!("Failed to generate generics_dump.txt: {}", e));
         } else {
-            println!("generics_dump.txt generated");
+            sp.finish_and_clear();
+            print_success("generics_dump.txt generated");
+            generated_files.push("generics_dump.txt".into());
         }
     }
 
     let elapsed = start_time.elapsed();
-    println!("Done! ({:.2}s)", elapsed.as_secs_f64());
+
+    println!();
+    println!(
+        "  {}",
+        style("═══════════════════════════════════════").green()
+    );
+    println!(
+        "  {} {}",
+        SPARKLE,
+        style("All tasks completed successfully!").green().bold()
+    );
+    println!(
+        "  {}",
+        style("═══════════════════════════════════════").green()
+    );
+    println!();
+    println!(
+        "  {}{} {}",
+        FOLDER,
+        style("Output Directory:").dim(),
+        style(&output_dir).white().bold().underlined()
+    );
+    println!(
+        "  {}{} {}",
+        PACKAGE,
+        style("Generated Files:").dim(),
+        style(generated_files.join(", ")).cyan()
+    );
+    println!(
+        "  {}{} {}",
+        ROCKET,
+        style("Elapsed:").dim(),
+        style(format!("{:.2}s", elapsed.as_secs_f64())).magenta().bold()
+    );
+    println!(
+        "  {}",
+        style("───────────────────────────────────────").dim()
+    );
+    println!();
 
     Ok(())
 }
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("ERROR: {e}");
+        eprintln!();
+        eprintln!(
+            "  {} {}",
+            style("✗ ERROR:").red().bold(),
+            style(&e).red()
+        );
+        eprintln!();
         process::exit(1);
     }
 }

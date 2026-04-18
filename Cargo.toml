@@ -1,6 +1,6 @@
 [package]
 name = "il2cpp_dumper"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 
 [[bin]]
@@ -10,7 +10,10 @@ path = "src/main.rs"
 [dependencies]
 byteorder = "1"
 clap = { version = "4", features = ["derive"] }
+console = "0.16"
+dialoguer = "0.12"
 dotnetdll = { path = "dotnetdll-main" }
+indicatif = "0.18"
 lz4_flex = "0.11"
 rayon = "1.11.0"
 serde = { version = "1", features = ["derive"] }
