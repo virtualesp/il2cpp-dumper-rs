@@ -115,6 +115,7 @@ pub struct CppTypeDependencyGraph {
     name_to_id: HashMap<String, NodeId>,
     already_processed: HashSet<NodeId>,
     processing_queue: VecDeque<NodeId>,
+    queued_nodes: HashSet<NodeId>,
 }
 
 impl CppTypeDependencyGraph {
@@ -124,6 +125,7 @@ impl CppTypeDependencyGraph {
             name_to_id: HashMap::new(),
             already_processed: HashSet::new(),
             processing_queue: VecDeque::new(),
+            queued_nodes: HashSet::new(),
         }
     }
 
@@ -195,6 +197,7 @@ impl CppTypeDependencyGraph {
 
         if !self.processing_queue.contains(&node_id) && !self.already_processed.contains(&node_id) {
             self.processing_queue.push_back(node_id);
+            self.queued_nodes.insert(node_id);
         }
     }
 
@@ -262,7 +265,14 @@ impl CppTypeDependencyGraph {
                     None => break,
                 };
 
-                let can_emit = self.nodes[node_id.0].outgoing_value.is_empty();
+                // Only queued (i.e. emitted) types can block emission order.
+                // Primitive/external helper nodes are represented in the graph,
+                // but are never emitted as top-level types.
+                let has_blocking_value_dep = self.nodes[node_id.0]
+                    .outgoing_value
+                    .iter()
+                    .any(|dep| self.queued_nodes.contains(dep));
+                let can_emit = !has_blocking_value_dep;
                 if !can_emit {
                     self.processing_queue.push_back(node_id);
                     continue;
@@ -276,7 +286,9 @@ impl CppTypeDependencyGraph {
                     .copied()
                     .collect();
                 for ref_id in &incoming_value {
-                    self.nodes[ref_id.0].outgoing_value.remove(&node_id);
+                    if self.queued_nodes.contains(ref_id) {
+                        self.nodes[ref_id.0].outgoing_value.remove(&node_id);
+                    }
                 }
 
                 let incoming_ref: Vec<NodeId> = self.nodes[node_id.0]
@@ -291,6 +303,7 @@ impl CppTypeDependencyGraph {
                 self.nodes[node_id.0].incoming_value.clear();
                 self.nodes[node_id.0].incoming_ref.clear();
                 self.already_processed.insert(node_id);
+                self.queued_nodes.remove(&node_id);
             }
 
             if self.processing_queue.len() == remaining_before {
@@ -301,6 +314,7 @@ impl CppTypeDependencyGraph {
                     let deps: Vec<String> = node
                         .outgoing_value
                         .iter()
+                        .filter(|d| self.queued_nodes.contains(d))
                         .map(|d| self.nodes[d.0].name.clone())
                         .collect();
                     chains.push((node.name.clone(), deps));
@@ -340,6 +354,7 @@ impl CppTypeDependencyGraph {
         self.name_to_id.clear();
         self.already_processed.clear();
         self.processing_queue.clear();
+        self.queued_nodes.clear();
     }
 }
 
