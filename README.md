@@ -129,6 +129,13 @@
 
 ## 📦 Installation
 
+### From crates.io
+```bash
+cargo install il2cpp_dumper
+```
+
+This installs the latest release globally. Run `il2cpp_dumper` from anywhere.
+
 ### From Source
 ```bash
 git clone https://github.com/rodroidmods/il2cpp-dumper-rs.git
