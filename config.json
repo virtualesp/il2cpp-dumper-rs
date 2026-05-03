@@ -36,5 +36,6 @@
   "enhancedIdaMetadata": true,
   "generateUnityHeaders": true,
   "compilerLayout": "GCC",
-  "useTopologicalSort": true
+  "useTopologicalSort": true,
+  "codm" : false
 }

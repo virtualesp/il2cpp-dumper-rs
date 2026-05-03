@@ -86,6 +86,20 @@ pub fn escape_string(s: &str) -> String {
     result
 }
 
+pub fn escape_string_preview(s: &str, max_len: usize) -> String {
+    let escaped = escape_string(s);
+    if escaped.len() <= max_len {
+        return escaped;
+    }
+    let cutoff = max_len.saturating_sub(3);
+    let safe_end = escaped.char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= cutoff)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &escaped[..safe_end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

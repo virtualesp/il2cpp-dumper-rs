@@ -1,7 +1,7 @@
 use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
-use yaxpeax_arm::armv8::a64::{InstDecoder as A64Decoder, Instruction as A64Instruction, Opcode as A64Opcode, Operand as A64Operand};
+use yaxpeax_arm::armv8::a64::{InstDecoder as A64Decoder, Instruction as A64Instruction, Opcode as A64Opcode, Operand as A64Operand, SizeCode as A64SizeCode};
 use yaxpeax_arm::armv7::{InstDecoder as A32Decoder, Instruction as A32Instruction};
-use super::DisassembledInstruction;
+use super::{DisassembledInstruction, RegRegAccess, ConstantOp, LoadInfo};
 
 pub fn disassemble_arm64(
     bytes: &[u8],
@@ -66,6 +66,14 @@ pub fn disassemble_arm64(
         let condition_code = extract_arm64_condition(&insn, &operands);
 
         let memory_offset = extract_arm64_memory_offset(&insn);
+        let reg_reg_access = extract_arm64_reg_reg_access(&insn);
+        let constant_op = extract_arm64_constant_op(&insn, address);
+        let load_info = extract_arm64_load_info(&insn, &mnemonic);
+        let indirect_call_reg = if (is_call && call_target.is_none())
+            || matches!(insn.opcode, A64Opcode::BR)
+        {
+            extract_arm64_indirect_call_reg(&insn)
+        } else { None };
 
         result.push(DisassembledInstruction {
             address,
@@ -81,6 +89,10 @@ pub fn disassemble_arm64(
             branch_target,
             condition_code,
             memory_offset,
+            reg_reg_access,
+            constant_op,
+            load_info,
+            indirect_call_reg,
         });
 
         offset += size as u64;
@@ -167,6 +179,10 @@ pub fn disassemble_arm32(
             branch_target,
             condition_code,
             memory_offset,
+            reg_reg_access: None,
+            constant_op: None,
+            load_info: None,
+            indirect_call_reg: None,
         });
 
         offset += size as u64;
@@ -354,6 +370,186 @@ fn extract_arm32_branch_target(text: &str, current_address: u64) -> Option<u64> 
         }
     }
     None
+}
+
+fn extract_arm64_load_info(insn: &A64Instruction, mnemonic: &str) -> Option<LoadInfo> {
+    let is_load = matches!(mnemonic, "LDR" | "LDRB" | "LDRH" | "LDRSB" | "LDRSH" | "LDRSW"
+        | "LDUR" | "LDURB" | "LDURH" | "LDURSB" | "LDURSH" | "LDURSW"
+        | "LDAR" | "LDARB" | "LDARH" | "LDAXR" | "LDXR");
+    if !is_load { return None; }
+
+    let dest_reg = match insn.operands[0] {
+        A64Operand::Register(_, r) => r,
+        _ => return None,
+    };
+
+    for i in 1..4 {
+        match insn.operands[i] {
+            A64Operand::RegPreIndex(base, offset, _) => {
+                return Some(LoadInfo { dest_reg, base_reg: base, offset: offset as i64 });
+            }
+            A64Operand::RegPostIndex(base, offset) => {
+                return Some(LoadInfo { dest_reg, base_reg: base, offset: offset as i64 });
+            }
+            A64Operand::Nothing => break,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_arm64_indirect_call_reg(insn: &A64Instruction) -> Option<u16> {
+    if !matches!(insn.opcode, A64Opcode::BLR | A64Opcode::BR) {
+        return None;
+    }
+    match insn.operands[0] {
+        A64Operand::Register(_, r) | A64Operand::RegisterOrSP(_, r) => Some(r),
+        _ => None,
+    }
+}
+
+fn extract_arm64_reg_reg_access(insn: &A64Instruction) -> Option<RegRegAccess> {
+    for i in 0..4 {
+        if let A64Operand::RegRegOffset(base, index, _size, _style, shift) = insn.operands[i] {
+            return Some(RegRegAccess {
+                base_reg: base,
+                index_reg: index,
+                shift,
+            });
+        }
+    }
+    None
+}
+
+fn extract_arm64_constant_op(insn: &A64Instruction, address: u64) -> Option<ConstantOp> {
+    match insn.opcode {
+        A64Opcode::MOVZ => {
+            let (reg, size) = match insn.operands[0] {
+                A64Operand::Register(s, r) if r != 31 => (r, s),
+                _ => return None,
+            };
+            if let A64Operand::ImmShift(imm, shift) = insn.operands[1] {
+                let mut value = (imm as u64) << shift;
+                if size == A64SizeCode::W { value = value as u32 as u64; }
+                return Some(ConstantOp::MovImm { dest_reg: reg, value });
+            }
+            None
+        }
+        A64Opcode::MOVK => {
+            let reg = match insn.operands[0] {
+                A64Operand::Register(_, r) if r != 31 => r,
+                _ => return None,
+            };
+            if let A64Operand::ImmShift(imm, shift) = insn.operands[1] {
+                return Some(ConstantOp::MovKeep { dest_reg: reg, imm16: imm, shift });
+            }
+            None
+        }
+        A64Opcode::MOVN => {
+            let (reg, size) = match insn.operands[0] {
+                A64Operand::Register(s, r) if r != 31 => (r, s),
+                _ => return None,
+            };
+            if let A64Operand::ImmShift(imm, shift) = insn.operands[1] {
+                let mut value = !((imm as u64) << shift);
+                if size == A64SizeCode::W { value = value as u32 as u64; }
+                return Some(ConstantOp::MovImm { dest_reg: reg, value });
+            }
+            None
+        }
+        A64Opcode::ADD | A64Opcode::SUB => {
+            let dest = match insn.operands[0] {
+                A64Operand::Register(_, r) | A64Operand::RegisterOrSP(_, r) if r != 31 => r,
+                _ => return None,
+            };
+            let src = match insn.operands[1] {
+                A64Operand::Register(_, r) | A64Operand::RegisterOrSP(_, r) => r,
+                _ => return None,
+            };
+            let imm_val = match insn.operands[2] {
+                A64Operand::Immediate(imm) => imm as i64,
+                A64Operand::ImmShift(imm, shift) => (imm as i64) << shift,
+                _ => return Some(ConstantOp::Kill { dest_reg: dest }),
+            };
+            let imm = if matches!(insn.opcode, A64Opcode::SUB) { -imm_val } else { imm_val };
+            Some(ConstantOp::AddSubImm { dest_reg: dest, src_reg: src, imm })
+        }
+        A64Opcode::ADDS | A64Opcode::SUBS => {
+            let dest = match insn.operands[0] {
+                A64Operand::Register(_, r) => r,
+                _ => return None,
+            };
+            if dest == 31 { return None; }
+            Some(ConstantOp::Kill { dest_reg: dest })
+        }
+        A64Opcode::ORR => {
+            let dest = match insn.operands[0] {
+                A64Operand::Register(_, r) if r != 31 => r,
+                _ => return None,
+            };
+            let is_zr_src = matches!(insn.operands[1], A64Operand::Register(_, 31));
+            if is_zr_src {
+                match insn.operands[2] {
+                    A64Operand::Register(_, src) => {
+                        return Some(ConstantOp::MovReg { dest_reg: dest, src_reg: src });
+                    }
+                    A64Operand::Imm64(imm) => {
+                        return Some(ConstantOp::MovImm { dest_reg: dest, value: imm });
+                    }
+                    _ => {}
+                }
+            }
+            Some(ConstantOp::Kill { dest_reg: dest })
+        }
+        A64Opcode::ADRP => {
+            let reg = match insn.operands[0] {
+                A64Operand::Register(_, r) if r != 31 => r,
+                _ => return None,
+            };
+            if let A64Operand::PCOffset(offset) = insn.operands[1] {
+                let page = (address as i64 + offset) as u64;
+                return Some(ConstantOp::Adrp { dest_reg: reg, page });
+            }
+            None
+        }
+        A64Opcode::LDP | A64Opcode::LDNP | A64Opcode::LDXP => {
+            let r1 = match insn.operands[0] {
+                A64Operand::Register(_, r) if r != 31 => r,
+                _ => return None,
+            };
+            let r2 = match insn.operands[1] {
+                A64Operand::Register(_, r) if r != 31 => Some(r),
+                _ => None,
+            };
+            if let Some(r2) = r2 {
+                Some(ConstantOp::KillPair { dest_reg1: r1, dest_reg2: r2 })
+            } else {
+                Some(ConstantOp::Kill { dest_reg: r1 })
+            }
+        }
+        // Non-writing instructions: stores, comparisons, branches, barriers, hints
+        A64Opcode::STR | A64Opcode::STRB | A64Opcode::STRH
+        | A64Opcode::STUR | A64Opcode::STURB | A64Opcode::STURH
+        | A64Opcode::STLR | A64Opcode::STLRB | A64Opcode::STLRH
+        | A64Opcode::STP | A64Opcode::STNP
+        | A64Opcode::CCMP | A64Opcode::CCMN
+        | A64Opcode::B | A64Opcode::BR | A64Opcode::BL | A64Opcode::BLR | A64Opcode::RET
+        | A64Opcode::CBZ | A64Opcode::CBNZ | A64Opcode::TBZ | A64Opcode::TBNZ
+        | A64Opcode::ISB | A64Opcode::SB | A64Opcode::HINT | A64Opcode::CLREX
+        | A64Opcode::SVC | A64Opcode::HVC | A64Opcode::SMC | A64Opcode::BRK | A64Opcode::HLT
+        | A64Opcode::MSR
+        | A64Opcode::UDF | A64Opcode::Invalid => None,
+        A64Opcode::DMB(_) | A64Opcode::DSB(_) | A64Opcode::SYS(_) => None,
+        // Any other instruction: if operands[0] is a register, kill it
+        _ => {
+            match insn.operands[0] {
+                A64Operand::Register(_, r) if r != 31 => {
+                    Some(ConstantOp::Kill { dest_reg: r })
+                }
+                _ => None,
+            }
+        }
+    }
 }
 
 fn extract_arm32_memory_offset(text: &str) -> Option<i64> {

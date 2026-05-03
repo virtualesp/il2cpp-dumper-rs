@@ -487,3 +487,122 @@ impl<'a> SectionHelper<'a> {
         }
     }
 }
+
+impl<'a> SectionHelper<'a> {
+    pub fn find_metadata_registration_codm(&self) -> Option<u64> {
+        let ptr_size = self.ptr_size();
+
+        let count_bytes = if self.is_32bit {
+            (self.type_definitions_count as u32).to_le_bytes().to_vec()
+        } else {
+            (self.type_definitions_count as u64).to_le_bytes().to_vec()
+        };
+
+        let mut fallback: Option<u64> = None;
+
+        for section in &self.data_sections {
+            let start = section.offset as usize;
+            let end = section.offset_end as usize;
+            if start >= self.data.len() || end > self.data.len() {
+                continue;
+            }
+            let slice = &self.data[start..end];
+            let mut search_start = 0usize;
+
+            while let Some(pos) = find_bytes(&slice[search_start..], &count_bytes) {
+                let abs_pos = start + search_start + pos;
+                search_start = (search_start + pos) + 1;
+
+                if abs_pos % ptr_size != 0 {
+                    continue;
+                }
+                if abs_pos < ptr_size * 12 {
+                    continue;
+                }
+                if abs_pos + ptr_size * 4 > self.data.len() {
+                    continue;
+                }
+
+                let prev_count_offset = abs_pos.wrapping_sub(ptr_size * 2);
+                let prev_count = match self.read_ptr_at(prev_count_offset) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                if prev_count != self.type_definitions_count as u64 {
+                    continue;
+                }
+
+                let prev_ptr_offset = abs_pos - ptr_size;
+                let prev_ptr = match self.read_ptr_at(prev_ptr_offset) {
+                    Some(v) if v > 0 => v,
+                    _ => continue,
+                };
+                if !self.is_in_data_sections(prev_ptr) && !self.is_in_bss_sections(prev_ptr) {
+                    continue;
+                }
+
+                let cur_ptr_offset = abs_pos + ptr_size;
+                let cur_ptr = match self.read_ptr_at(cur_ptr_offset) {
+                    Some(v) if v > 0 => v,
+                    _ => continue,
+                };
+                if !self.is_in_data_sections(cur_ptr) && !self.is_in_bss_sections(cur_ptr) {
+                    continue;
+                }
+
+                let mu_count_offset = abs_pos + ptr_size * 2;
+                let mu_count_val = match self.read_ptr_at(mu_count_offset) {
+                    Some(v) => v as usize,
+                    None => continue,
+                };
+                if mu_count_val == 0 || mu_count_val > 10_000_000 {
+                    continue;
+                }
+
+                let mu_ptr_offset = abs_pos + ptr_size * 3;
+                let mu_va = match self.read_ptr_at(mu_ptr_offset) {
+                    Some(v) if v > 0 => v,
+                    _ => continue,
+                };
+                if !self.is_in_data_sections(mu_va) && !self.is_in_bss_sections(mu_va) {
+                    continue;
+                }
+
+                let addr_va = section.address + (abs_pos as u64 - section.offset);
+                let mr_base = addr_va - (ptr_size as u64) * 12;
+
+                if self.is_codm_metadata_usages_pointer(mu_va, mu_count_val, ptr_size) {
+                    return Some(mr_base);
+                }
+
+                if fallback.is_none() {
+                    fallback = Some(mr_base);
+                }
+            }
+        }
+        fallback
+    }
+
+    fn is_codm_metadata_usages_pointer(&self, mu_va: u64, mu_count: usize, ptr_size: usize) -> bool {
+        let mu_offset = match self.va_to_offset_data(mu_va) {
+            Some(o) => o,
+            None => return self.is_in_bss_sections(mu_va),
+        };
+        let check_count = std::cmp::min(mu_count, 100);
+        let mut valid = 0usize;
+        for i in 0..check_count {
+            let entry_offset = mu_offset + i * ptr_size;
+            if entry_offset + ptr_size > self.data.len() {
+                return false;
+            }
+            match self.read_ptr_at(entry_offset) {
+                Some(ptr) if ptr == 0 => {}
+                Some(ptr) if self.is_in_bss_sections(ptr) || self.is_in_data_sections(ptr) || self.is_in_code_sections(ptr) => {
+                    valid += 1;
+                }
+                _ => return false,
+            }
+        }
+        valid * 2 >= check_count
+    }
+}

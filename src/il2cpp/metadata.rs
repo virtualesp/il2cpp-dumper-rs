@@ -5,9 +5,68 @@ use super::structures::*;
 
 pub const METADATA_MAGIC: u32 = 0xFAB11BAF;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataVariant {
+    Standard,
+    Codm,
+}
+
+fn detect_codm_variant(stream: &mut BinaryStream, file_size: u64) -> bool {
+    const PAIR_COUNT: usize = 33;
+    const HEADER_BYTES: u64 = 8 + (PAIR_COUNT as u64) * 8;
+
+    let saved = stream.position();
+    if file_size < HEADER_BYTES {
+        return false;
+    }
+
+    stream.set_position(8);
+    let mut pairs: Vec<(i32, i32)> = Vec::with_capacity(PAIR_COUNT);
+    for _ in 0..PAIR_COUNT {
+        let off = match stream.read_i32() {
+            Ok(v) => v,
+            Err(_) => {
+                stream.set_position(saved);
+                return false;
+            }
+        };
+        let size = match stream.read_i32() {
+            Ok(v) => v,
+            Err(_) => {
+                stream.set_position(saved);
+                return false;
+            }
+        };
+        pairs.push((off, size));
+    }
+    stream.set_position(saved);
+
+    let mut any_nonzero = false;
+    for &(off, size) in &pairs {
+        if off < 0 || size < 0 {
+            return false;
+        }
+        let end = (off as u64).saturating_add(size as u64);
+        if end > file_size {
+            return false;
+        }
+        if size > 0 {
+            any_nonzero = true;
+        }
+    }
+    if !any_nonzero {
+        return false;
+    }
+
+    pairs.iter().any(|&(_, size)| {
+        size > 0 && size % 80 == 0 && size >= 80 * 16 && (size as u64) < file_size
+    })
+}
+
 pub struct Metadata {
     pub stream: BinaryStream,
     pub version: f64,
+    pub variant: MetadataVariant,
     pub header: Il2CppGlobalMetadataHeader,
     pub unity_version: Option<UnityVersion>,
 
@@ -52,10 +111,18 @@ pub struct Metadata {
 
 impl Metadata {
     pub fn new(data: Vec<u8>) -> Result<Self> {
-        Self::new_with_unity_version(data, None)
+        Self::new_with_options(data, None, false)
     }
 
     pub fn new_with_unity_version(data: Vec<u8>, unity_version_str: Option<&str>) -> Result<Self> {
+        Self::new_with_options(data, unity_version_str, false)
+    }
+
+    pub fn new_with_options(
+        data: Vec<u8>,
+        unity_version_str: Option<&str>,
+        force_codm: bool,
+    ) -> Result<Self> {
         let mut stream = BinaryStream::new(data);
         stream.set_position(0);
 
@@ -79,6 +146,27 @@ impl Metadata {
             eprintln!("Info: Unity 6 metadata (v{version_raw}) detected. Using variable-width index mode.");
         }
 
+        let variant = if force_codm {
+            if version_raw != 23 {
+                eprintln!(
+                    "Warning: --codm forced but metadata version is {version_raw} (CODM uses v23). Continuing with CODM layout anyway."
+                );
+            } else {
+                eprintln!("Info: CODM metadata variant forced via config/CLI.");
+            }
+            MetadataVariant::Codm
+        } else if version_raw == 23 {
+            let file_size = stream.len();
+            if detect_codm_variant(&mut stream, file_size) {
+                eprintln!("Info: CODM metadata variant auto-detected (custom v23 schema).");
+                MetadataVariant::Codm
+            } else {
+                MetadataVariant::Standard
+            }
+        } else {
+            MetadataVariant::Standard
+        };
+
         let unity_version = unity_version_str.and_then(UnityVersion::parse);
 
         let version = if let Some(ref uv) = unity_version {
@@ -92,11 +180,15 @@ impl Metadata {
         };
 
         stream.set_position(0);
-        let header = Il2CppGlobalMetadataHeader::read(&mut stream, version)?;
+        let header = match variant {
+            MetadataVariant::Codm => Il2CppGlobalMetadataHeader::read_codm(&mut stream)?,
+            MetadataVariant::Standard => Il2CppGlobalMetadataHeader::read(&mut stream, version)?,
+        };
 
         let mut meta = Self {
             stream,
             version,
+            variant,
             header,
             unity_version,
             image_defs: Vec::new(),
@@ -133,7 +225,7 @@ impl Metadata {
             generic_param_offset_to_index: HashMap::new(),
         };
 
-        if meta.unity_version.is_none() {
+        if meta.unity_version.is_none() && meta.variant != MetadataVariant::Codm {
             meta.detect_subversion()?;
         }
         let widths = IndexWidths::from_header(&meta.header, meta.version);
@@ -168,6 +260,9 @@ impl Metadata {
     }
 
     fn load_metadata(&mut self) -> Result<()> {
+        if self.variant == MetadataVariant::Codm {
+            return self.load_metadata_codm();
+        }
         let h = self.header.clone();
         let v38 = self.version >= 38.0;
         let _widths = IndexWidths::from_header(&h, self.version);
@@ -318,6 +413,129 @@ impl Metadata {
         }
 
         Ok(())
+    }
+
+    fn load_metadata_codm(&mut self) -> Result<()> {
+        let h = self.header.clone();
+        let _widths = IndexWidths::from_header(&h, self.version);
+
+        macro_rules! load_c {
+            ($t:ty, $off:expr, $size:expr) => {{
+                self.read_metadata_array_codm::<$t>($off as u64, $size as u64)?
+            }};
+        }
+        macro_rules! load_std {
+            ($t:ty, $off:expr, $size:expr) => {{
+                self.read_metadata_array::<$t>($off as u64, $size as u64, None)?
+            }};
+        }
+
+        self.image_defs = load_c!(Il2CppImageDefinition, h.images_offset, h.images_size);
+        self.assembly_defs = load_c!(Il2CppAssemblyDefinition, h.assemblies_offset, h.assemblies_size);
+        self.type_defs = load_c!(Il2CppTypeDefinition, h.type_definitions_offset, h.type_definitions_size);
+        self.method_defs = load_c!(Il2CppMethodDefinition, h.methods_offset, h.methods_size);
+        self.parameter_defs = load_c!(Il2CppParameterDefinition, h.parameters_offset, h.parameters_size);
+        self.field_defs = load_c!(Il2CppFieldDefinition, h.fields_offset, h.fields_size);
+
+        let field_defaults_vec = load_std!(Il2CppFieldDefaultValue, h.field_default_values_offset, h.field_default_values_size);
+        self.field_default_values = field_defaults_vec.into_iter().map(|v| (v.field_index, v)).collect();
+
+        let param_defaults = load_std!(Il2CppParameterDefaultValue, h.parameter_default_values_offset, h.parameter_default_values_size);
+        self.param_default_values = param_defaults.into_iter().map(|v| (v.parameter_index, v)).collect();
+
+        self.property_defs = load_c!(Il2CppPropertyDefinition, h.properties_offset, h.properties_size);
+
+        self.interface_indices = {
+            let type_idx_sz = IndexWidths::get_type_index_size(&h);
+            let count = h.interfaces_size as usize / type_idx_sz;
+            let mut out = Vec::with_capacity(count);
+            self.stream.set_position(h.interfaces_offset as u64);
+            for _ in 0..count {
+                out.push(self.stream.read_variable_index(type_idx_sz as u8)?);
+            }
+            out
+        };
+
+        self.interface_offsets = {
+            let type_idx_sz = IndexWidths::get_type_index_size(&h);
+            let each_sz = type_idx_sz + 4;
+            let count = h.interface_offsets_size as usize / each_sz;
+            let mut out = Vec::with_capacity(count);
+            self.stream.set_position(h.interface_offsets_offset as u64);
+            for _ in 0..count {
+                out.push(Il2CppInterfaceOffset::read(&mut self.stream)?);
+            }
+            out
+        };
+
+        self.nested_type_indices = self.stream.read_i32_array(
+            h.nested_types_offset as u64,
+            h.nested_types_size as usize / 4,
+        )?;
+
+        self.event_defs = load_c!(Il2CppEventDefinition, h.events_offset, h.events_size);
+        self.generic_containers = load_c!(Il2CppGenericContainer, h.generic_containers_offset, h.generic_containers_size);
+        self.generic_parameters = load_c!(Il2CppGenericParameter, h.generic_parameters_offset, h.generic_parameters_size);
+
+        self.constraint_indices = self.stream.read_i32_array(
+            h.generic_parameter_constraints_offset as u64,
+            h.generic_parameter_constraints_size as usize / 4,
+        )?;
+
+        self.vtable_methods = self.stream.read_u32_array(
+            h.vtable_methods_offset as u64,
+            h.vtable_methods_size as usize / 4,
+        )?;
+
+        self.string_literals = load_std!(Il2CppStringLiteral, h.string_literal_offset, h.string_literal_size);
+
+        self.field_refs = load_c!(Il2CppFieldRef, h.field_refs_offset, h.field_refs_size);
+
+        if self.version < 27.0 {
+            let usage_lists = load_c!(Il2CppMetadataUsageList, h.metadata_usage_lists_offset, h.metadata_usage_lists_count);
+            let usage_pairs = load_std!(Il2CppMetadataUsagePair, h.metadata_usage_pairs_offset, h.metadata_usage_pairs_count);
+            self.process_metadata_usage(&usage_lists, &usage_pairs);
+        }
+
+        if self.version < 29.0 {
+            self.attribute_type_ranges = load_c!(Il2CppCustomAttributeTypeRange, h.attributes_info_offset, h.attributes_info_count);
+            self.attribute_types = self.stream.read_i32_array(
+                h.attribute_types_offset as u64,
+                h.attribute_types_count as usize / 4,
+            )?;
+        }
+
+        if self.version > 24.0 {
+            self.build_attribute_lookup();
+        }
+
+        self.metadata_usages_count = self.calculate_metadata_usages_count();
+
+        if h.referenced_assemblies_offset > 0 && h.referenced_assemblies_size > 0 {
+            self.referenced_assemblies = self.stream.read_i32_array(
+                h.referenced_assemblies_offset as u64,
+                h.referenced_assemblies_size as usize / 4,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn read_metadata_array_codm<T: CodmReadable>(&mut self, offset: u64, size: u64) -> Result<Vec<T>> {
+        if offset == 0 || size == 0 {
+            return Ok(Vec::new());
+        }
+        let elem = T::codm_size_dispatch() as u64;
+        if elem == 0 {
+            return Err(Error::InvalidMetadata("CODM struct size missing".into()));
+        }
+        let count = (size / elem) as usize;
+        self.stream.set_position(offset);
+        let mut items = Vec::with_capacity(count);
+        for _ in 0..count {
+            items.push(T::read_codm_dispatch(&mut self.stream)?);
+        }
+        Ok(items)
     }
 
     fn read_metadata_array<T: MetadataReadable>(&mut self, offset: u64, size: u64, count_override: Option<usize>) -> Result<Vec<T>> {
@@ -538,6 +756,12 @@ impl Metadata {
 pub trait MetadataReadable: Sized {
     fn read(stream: &mut BinaryStream, version: f64) -> Result<Self>;
     fn byte_size(version: f64) -> usize;
+    fn read_codm(_stream: &mut BinaryStream) -> Result<Self> {
+        Err(Error::InvalidMetadata("CODM variant not supported for this struct".into()))
+    }
+    fn codm_byte_size() -> usize {
+        0
+    }
 }
 
 macro_rules! impl_metadata_readable {
@@ -585,3 +809,35 @@ impl_metadata_readable_simple!(Il2CppMetadataUsageList, 8);
 impl_metadata_readable_simple!(Il2CppMetadataUsagePair, 8);
 impl_metadata_readable!(Il2CppCustomAttributeTypeRange);
 impl_metadata_readable_simple!(Il2CppCustomAttributeDataRange, 8);
+
+macro_rules! impl_codm_overrides {
+    ($t:ty) => {
+        impl CodmReadable for $t {
+            fn read_codm_dispatch(stream: &mut BinaryStream) -> Result<Self> {
+                <$t>::read_codm(stream)
+            }
+            fn codm_size_dispatch() -> usize {
+                <$t>::CODM_BYTE_SIZE
+            }
+        }
+    };
+}
+
+pub trait CodmReadable: Sized {
+    fn read_codm_dispatch(stream: &mut BinaryStream) -> Result<Self>;
+    fn codm_size_dispatch() -> usize;
+}
+
+impl_codm_overrides!(Il2CppImageDefinition);
+impl_codm_overrides!(Il2CppAssemblyDefinition);
+impl_codm_overrides!(Il2CppTypeDefinition);
+impl_codm_overrides!(Il2CppMethodDefinition);
+impl_codm_overrides!(Il2CppParameterDefinition);
+impl_codm_overrides!(Il2CppFieldDefinition);
+impl_codm_overrides!(Il2CppPropertyDefinition);
+impl_codm_overrides!(Il2CppEventDefinition);
+impl_codm_overrides!(Il2CppGenericContainer);
+impl_codm_overrides!(Il2CppGenericParameter);
+impl_codm_overrides!(Il2CppFieldRef);
+impl_codm_overrides!(Il2CppMetadataUsageList);
+impl_codm_overrides!(Il2CppCustomAttributeTypeRange);

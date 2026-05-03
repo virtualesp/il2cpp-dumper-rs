@@ -477,6 +477,165 @@ impl Il2CppGlobalMetadataHeader {
             type_inline_arrays_offset, type_inline_arrays_size, type_inline_arrays_count,
         })
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let sanity = stream.read_u32()?;
+        let version_field = stream.read_i32()?;
+        let string_literal_offset = stream.read_i32()?;
+        let string_literal_size = stream.read_i32()?;
+        let string_literal_data_offset = stream.read_i32()?;
+        let string_literal_data_size = stream.read_i32()?;
+        let string_offset = stream.read_i32()?;
+        let string_size = stream.read_i32()?;
+        let events_offset = stream.read_i32()?;
+        let events_size = stream.read_i32()?;
+        let properties_offset = stream.read_i32()?;
+        let properties_size = stream.read_i32()?;
+        let methods_offset = stream.read_i32()?;
+        let methods_size = stream.read_i32()?;
+        let parameter_default_values_offset = stream.read_i32()?;
+        let parameter_default_values_size = stream.read_i32()?;
+        let field_default_values_offset = stream.read_i32()?;
+        let field_default_values_size = stream.read_i32()?;
+        let field_and_parameter_default_value_data_offset = stream.read_i32()?;
+        let field_and_parameter_default_value_data_size = stream.read_i32()?;
+        let field_marshaled_sizes_offset = stream.read_i32()?;
+        let field_marshaled_sizes_size = stream.read_i32()?;
+        let parameters_offset = stream.read_i32()?;
+        let parameters_size = stream.read_i32()?;
+        let fields_offset = stream.read_i32()?;
+        let fields_size = stream.read_i32()?;
+        let generic_parameters_offset = stream.read_i32()?;
+        let generic_parameters_size = stream.read_i32()?;
+        let generic_parameter_constraints_offset = stream.read_i32()?;
+        let generic_parameter_constraints_size = stream.read_i32()?;
+        let generic_containers_offset = stream.read_i32()?;
+        let generic_containers_size = stream.read_i32()?;
+        let nested_types_offset = stream.read_i32()?;
+        let nested_types_size = stream.read_i32()?;
+        let interfaces_offset = stream.read_i32()?;
+        let interfaces_size = stream.read_i32()?;
+        let vtable_methods_offset = stream.read_i32()?;
+        let vtable_methods_size = stream.read_i32()?;
+        let interface_offsets_offset = stream.read_i32()?;
+        let interface_offsets_size = stream.read_i32()?;
+        let type_definitions_offset = stream.read_i32()?;
+        let type_definitions_size = stream.read_i32()?;
+        let rgctx_entries_offset = stream.read_i32()?;
+        let rgctx_entries_count = stream.read_i32()?;
+        let images_offset = stream.read_i32()?;
+        let images_size = stream.read_i32()?;
+        let assemblies_offset = stream.read_i32()?;
+        let assemblies_size = stream.read_i32()?;
+        let metadata_usage_lists_offset = stream.read_i32()?;
+        let metadata_usage_lists_count = stream.read_i32()?;
+        let metadata_usage_pairs_offset = stream.read_i32()?;
+        let metadata_usage_pairs_count = stream.read_i32()?;
+        let field_refs_offset = stream.read_i32()?;
+        let field_refs_size = stream.read_i32()?;
+        let referenced_assemblies_offset = stream.read_i32()?;
+        let referenced_assemblies_size = stream.read_i32()?;
+        let attributes_info_offset = stream.read_i32()?;
+        let attributes_info_count = stream.read_i32()?;
+        let attribute_types_offset = stream.read_i32()?;
+        let attribute_types_count = stream.read_i32()?;
+        let unresolved_virtual_call_parameter_types_offset = stream.read_i32()?;
+        let unresolved_virtual_call_parameter_types_size = stream.read_i32()?;
+        let unresolved_virtual_call_parameter_ranges_offset = stream.read_i32()?;
+        let unresolved_virtual_call_parameter_ranges_size = stream.read_i32()?;
+        let windows_runtime_type_names_offset = stream.read_i32()?;
+        let windows_runtime_type_names_size = stream.read_i32()?;
+        Ok(Self {
+            sanity,
+            version: version_field,
+            string_literal_offset,
+            string_literal_size,
+            string_literal_data_offset,
+            string_literal_data_size,
+            string_offset,
+            string_size,
+            events_offset,
+            events_size,
+            properties_offset,
+            properties_size,
+            methods_offset,
+            methods_size,
+            parameter_default_values_offset,
+            parameter_default_values_size,
+            field_default_values_offset,
+            field_default_values_size,
+            field_and_parameter_default_value_data_offset,
+            field_and_parameter_default_value_data_size,
+            field_marshaled_sizes_offset,
+            field_marshaled_sizes_size,
+            parameters_offset,
+            parameters_size,
+            fields_offset,
+            fields_size,
+            generic_parameters_offset,
+            generic_parameters_size,
+            generic_parameter_constraints_offset,
+            generic_parameter_constraints_size,
+            generic_containers_offset,
+            generic_containers_size,
+            nested_types_offset,
+            nested_types_size,
+            interfaces_offset,
+            interfaces_size,
+            vtable_methods_offset,
+            vtable_methods_size,
+            interface_offsets_offset,
+            interface_offsets_size,
+            type_definitions_offset,
+            type_definitions_size,
+            rgctx_entries_offset,
+            rgctx_entries_count,
+            images_offset,
+            images_size,
+            assemblies_offset,
+            assemblies_size,
+            metadata_usage_lists_offset,
+            metadata_usage_lists_count,
+            metadata_usage_pairs_offset,
+            metadata_usage_pairs_count,
+            field_refs_offset,
+            field_refs_size,
+            referenced_assemblies_offset,
+            referenced_assemblies_size,
+            attributes_info_offset,
+            attributes_info_count,
+            attribute_types_offset,
+            attribute_types_count,
+            attribute_data_offset: 0,
+            attribute_data_size: 0,
+            attribute_data_range_offset: 0,
+            attribute_data_range_size: 0,
+            unresolved_virtual_call_parameter_types_offset,
+            unresolved_virtual_call_parameter_types_size,
+            unresolved_virtual_call_parameter_ranges_offset,
+            unresolved_virtual_call_parameter_ranges_size,
+            windows_runtime_type_names_offset,
+            windows_runtime_type_names_size,
+            windows_runtime_strings_offset: 0,
+            windows_runtime_strings_size: 0,
+            exported_type_definitions_offset: 0,
+            exported_type_definitions_size: 0,
+            type_definitions_count: 0,
+            generic_containers_count: 0,
+            interface_offsets_count: 0,
+            parameters_count: 0,
+            events_count: 0,
+            properties_count: 0,
+            nested_types_count: 0,
+            methods_count: 0,
+            generic_parameters_count: 0,
+            fields_count: 0,
+            field_and_parameter_default_value_data_count: 0,
+            type_inline_arrays_offset: 0,
+            type_inline_arrays_size: 0,
+            type_inline_arrays_count: 0,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -521,6 +680,28 @@ impl Il2CppImageDefinition {
         if version >= 24.1 { size += 8; } // custom_attribute_start, custom_attribute_count
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()? as i32;
+        let assembly_index = stream.read_i32()?;
+        let type_start = stream.read_i32()?;
+        let type_count = stream.read_u32()? as i32;
+        let entry_point_index = stream.read_i32()?;
+        Ok(Self {
+            name_index,
+            assembly_index,
+            type_start,
+            type_count,
+            exported_type_start: 0,
+            exported_type_count: 0,
+            entry_point_index,
+            token: 1,
+            custom_attribute_start: 0,
+            custom_attribute_count: 0,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 20;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -613,6 +794,25 @@ impl Il2CppAssemblyDefinition {
         if version <= 24.3 { size += 4; } // hash_value_index
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let image_index = stream.read_i32()?;
+        let custom_attribute_index = stream.read_i16()? as i32;
+        let referenced_assembly_start = stream.read_i32()?;
+        let referenced_assembly_count = stream.read_i32()?;
+        let aname = Il2CppAssemblyNameDefinition::read(stream, 23.0)?;
+        Ok(Self {
+            image_index,
+            token: 0,
+            module_token: 0,
+            custom_attribute_index,
+            referenced_assembly_start,
+            referenced_assembly_count,
+            aname,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 4 + 2 + 4 + 4 + 4 * 11 + 8;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -740,6 +940,76 @@ impl Il2CppTypeDefinition {
         if version >= 19.0 { size += 4; } // token
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()? as i32;
+        let namespace_index = stream.read_u32()? as i32;
+        let byval_type_index = stream.read_i32()?;
+        let byref_type_index = stream.read_i32()?;
+        let declaring_type_index = stream.read_i32()?;
+        let parent_index = stream.read_i32()?;
+        let element_type_index = stream.read_i32()?;
+        let flags = stream.read_u32()?;
+        let field_start = stream.read_i32()?;
+        let method_start = stream.read_i32()?;
+        let vtable_start = stream.read_i32()?;
+        let custom_attribute_index = stream.read_i16()? as i32;
+        let rgctx_start_index = stream.read_i16()? as i32;
+        let rgctx_count = stream.read_i16()? as i32;
+        let generic_container_index = stream.read_i16()? as i32;
+        let event_start = stream.read_u16()? as i32;
+        let property_start = stream.read_u16()? as i32;
+        let nested_types_start = stream.read_u16()? as i32;
+        let interfaces_start = stream.read_u16()? as i32;
+        let interface_offsets_start = stream.read_u16()? as i32;
+        let method_count = stream.read_u16()?;
+        let property_count = stream.read_u16()?;
+        let field_count = stream.read_u16()?;
+        let event_count = stream.read_u16()?;
+        let nested_type_count = stream.read_u16()?;
+        let vtable_count = stream.read_u16()?;
+        let interfaces_count = stream.read_u16()?;
+        let interface_offsets_count = stream.read_u16()?;
+        let bitfield = stream.read_u16()? as u32;
+        Ok(Self {
+            name_index,
+            namespace_index,
+            custom_attribute_index,
+            byval_type_index,
+            byref_type_index,
+            declaring_type_index,
+            parent_index,
+            element_type_index,
+            rgctx_start_index,
+            rgctx_count,
+            generic_container_index,
+            delegate_wrapper_from_managed_to_native_index: 0,
+            marshaling_functions_index: 0,
+            ccw_function_index: 0,
+            guid_index: 0,
+            flags,
+            field_start,
+            method_start,
+            event_start,
+            property_start,
+            nested_types_start,
+            interfaces_start,
+            vtable_start,
+            interface_offsets_start,
+            method_count,
+            property_count,
+            field_count,
+            event_count,
+            nested_type_count,
+            vtable_count,
+            interfaces_count,
+            interface_offsets_count,
+            bitfield,
+            token: 0,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 80;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -802,6 +1072,46 @@ impl Il2CppMethodDefinition {
         size += 2 * 4; // flags, iflags, slot, parameter_count
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()?;
+        let method_index = stream.read_i32()?;
+        let return_type = stream.read_i32()?;
+        let parameter_start = stream.read_i32()?;
+        let token = stream.read_u32()?;
+        let declaring_type = stream.read_u16()? as i32;
+        let custom_attribute_index = stream.read_i16()? as i32;
+        let generic_container_index = stream.read_i16()? as i32;
+        let invoker_index = stream.read_u16()? as i32;
+        let delegate_wrapper_index = stream.read_i16()? as i32;
+        let rgctx_start_index = stream.read_i16()? as i32;
+        let rgctx_count = stream.read_u16()? as i32;
+        let flags = stream.read_u16()?;
+        let iflags = stream.read_u16()?;
+        let slot = stream.read_u16()?;
+        let parameter_count = stream.read_u16()?;
+        Ok(Self {
+            name_index,
+            declaring_type,
+            return_type,
+            return_parameter_token: 0,
+            parameter_start,
+            custom_attribute_index,
+            generic_container_index,
+            method_index,
+            invoker_index,
+            delegate_wrapper_index,
+            rgctx_start_index,
+            rgctx_count,
+            token,
+            flags,
+            iflags,
+            slot,
+            parameter_count,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 42;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -827,6 +1137,20 @@ impl Il2CppParameterDefinition {
         if version <= 24.0 { size += 4; } // custom_attribute_index
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()? as i32;
+        let custom_attribute_index = stream.read_i16()? as i32;
+        let type_index = stream.read_i32()?;
+        Ok(Self {
+            name_index,
+            token: 0,
+            custom_attribute_index,
+            type_index,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 10;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -853,6 +1177,20 @@ impl Il2CppFieldDefinition {
         if version >= 19.0 { size += 4; }
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()? as i32;
+        let type_index = stream.read_i32()?;
+        let custom_attribute_index = stream.read_i16()? as i32;
+        Ok(Self {
+            name_index,
+            type_index,
+            custom_attribute_index,
+            token: 0,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 10;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -925,6 +1263,24 @@ impl Il2CppPropertyDefinition {
         if version >= 19.0 { size += 4; }
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()? as i32;
+        let get = stream.read_i16()? as i32;
+        let set = stream.read_i16()? as i32;
+        let attrs = stream.read_u16()? as u32;
+        let custom_attribute_index = stream.read_u16()? as i32;
+        Ok(Self {
+            name_index,
+            get,
+            set,
+            attrs,
+            custom_attribute_index,
+            token: 0,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 12;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -957,6 +1313,26 @@ impl Il2CppEventDefinition {
         if version >= 19.0 { size += 4; }
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()? as i32;
+        let type_index = stream.read_i32()?;
+        let add = stream.read_i16()? as i32;
+        let remove = stream.read_i16()? as i32;
+        let raise = stream.read_i16()? as i32;
+        let custom_attribute_index = stream.read_i16()? as i32;
+        Ok(Self {
+            name_index,
+            type_index,
+            add,
+            remove,
+            raise,
+            custom_attribute_index,
+            token: 0,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 16;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -983,6 +1359,21 @@ impl Il2CppGenericContainer {
         if version >= 106.0 { return 0; } // variable due to generic_param_idx + packed fields
         16 // pre-v106: 4+4+4+4
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let owner_index = stream.read_i32()?;
+        let generic_parameter_start = stream.read_i32()?;
+        let type_argc = stream.read_i16()? as i32;
+        let is_method = stream.read_i16()? as i32;
+        Ok(Self {
+            owner_index,
+            type_argc,
+            is_method,
+            generic_parameter_start,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 12;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1011,6 +1402,25 @@ impl Il2CppGenericParameter {
         if version >= 38.0 { return 0; } // ownerIndex (gc_idx) is variable
         16 // 4+4+2+2+2+2
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let name_index = stream.read_u32()?;
+        let owner_index = stream.read_u16()? as i32;
+        let constraints_start = stream.read_i16()?;
+        let constraints_count = stream.read_i16()?;
+        let num = stream.read_u16()?;
+        let flags = stream.read_u16()?;
+        Ok(Self {
+            owner_index,
+            name_index,
+            constraints_start,
+            constraints_count,
+            num,
+            flags,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 14;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1034,6 +1444,18 @@ impl Il2CppCustomAttributeTypeRange {
         if version >= 24.1 { size += 4; } // token
         size
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let start = stream.read_u16()? as i32;
+        let count = stream.read_u16()? as i32;
+        Ok(Self {
+            token: 0,
+            start,
+            count,
+        })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 4;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1064,6 +1486,14 @@ impl Il2CppMetadataUsageList {
             count: stream.read_u32()?,
         })
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let start = stream.read_u32()?;
+        let count = stream.read_u16()? as u32;
+        Ok(Self { start, count })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 6;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1116,6 +1546,14 @@ impl Il2CppFieldRef {
         if version >= 38.0 { return 0; } // type_index and field_index are variable
         8
     }
+
+    pub fn read_codm(stream: &mut BinaryStream) -> Result<Self> {
+        let type_index = stream.read_i32()?;
+        let field_index = stream.read_i16()? as i32;
+        Ok(Self { type_index, field_index })
+    }
+
+    pub const CODM_BYTE_SIZE: usize = 6;
 }
 
 #[derive(Debug, Clone, Default)]

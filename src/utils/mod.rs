@@ -4,6 +4,7 @@ pub mod string_utils;
 pub use pattern_search::find_bytes;
 pub use string_utils::{
     escape_string,
+    escape_string_preview,
     sanitize_cpp_identifier,
     sanitize_mangled_identifier_chars,
     NameSanitizerOptions,

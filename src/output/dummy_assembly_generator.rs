@@ -93,6 +93,7 @@ struct DummyDllContext {
     type_map: HashMap<usize, usize>,
     mscorlib_ref: dotnetdll::resolution::AssemblyRefIndex,
     void_type_ref: dotnetdll::resolution::TypeRefIndex,
+    gen_param_total: usize,
 }
 
 fn type_accessibility_from_flags(flags: u32) -> TypeAccessibility {
@@ -245,6 +246,7 @@ pub fn generate_dummy_dlls(
             type_map: type_map.clone(),
             mscorlib_ref,
             void_type_ref,
+            gen_param_total: generic_parameters.len(),
         };
 
         for index in type_start..type_end {
@@ -365,9 +367,14 @@ pub fn generate_dummy_dlls(
                 if let Some(&dotnet_idx) = type_map.get(&index) {
                     let skip_body = *multicast_delegate_set.get(&index).unwrap_or(&false);
 
+                    let type_token = if metadata.variant == crate::il2cpp::metadata::MetadataVariant::Codm {
+                        0
+                    } else {
+                        type_def.token
+                    };
                     let token_attr = make_named_string_attr(
                         attr_ctors.token_ctor,
-                        vec![("Token", format!("0x{:X}", type_def.token))],
+                        vec![("Token", format!("0x{:X}", type_token))],
                     );
                     resolution.type_definitions[dotnet_idx].attributes.push(token_attr);
 
@@ -405,9 +412,14 @@ pub fn generate_dummy_dlls(
                                 }
                             }
 
+                            let field_token = if metadata.variant == crate::il2cpp::metadata::MetadataVariant::Codm {
+                                0
+                            } else {
+                                field_def.token
+                            };
                             field.attributes.push(make_named_string_attr(
                                 attr_ctors.token_ctor,
-                                vec![("Token", format!("0x{:X}", field_def.token))],
+                                vec![("Token", format!("0x{:X}", field_token))],
                             ));
 
                             if !is_literal {
@@ -1227,7 +1239,9 @@ fn il2cpp_type_to_member(
 ) -> MemberType {
     let type_enum = Il2CppTypeEnum::from_u8(il2cpp_type.type_enum);
     if let Some(Il2CppTypeEnum::Var) = type_enum {
-        return MemberType::TypeGeneric(il2cpp_type.datapoint as usize);
+        let dp = il2cpp_type.datapoint as usize;
+        let idx = if ctx.gen_param_total > 0 && dp < ctx.gen_param_total { dp } else { 0 };
+        return MemberType::TypeGeneric(idx);
     }
     MemberType::Base(Box::new(il2cpp_type_to_base_member(il2cpp_type, types, type_map, resolution, ctx)))
 }
@@ -1297,10 +1311,14 @@ fn il2cpp_type_to_method_type(
 ) -> MethodType {
     let type_enum = Il2CppTypeEnum::from_u8(il2cpp_type.type_enum);
     if let Some(Il2CppTypeEnum::Var) = type_enum {
-        return MethodType::TypeGeneric(il2cpp_type.datapoint as usize);
+        let dp = il2cpp_type.datapoint as usize;
+        let idx = if ctx.gen_param_total > 0 && dp < ctx.gen_param_total { dp } else { 0 };
+        return MethodType::TypeGeneric(idx);
     }
     if let Some(Il2CppTypeEnum::MVar) = type_enum {
-        return MethodType::MethodGeneric(il2cpp_type.datapoint as usize);
+        let dp = il2cpp_type.datapoint as usize;
+        let idx = if ctx.gen_param_total > 0 && dp < ctx.gen_param_total { dp } else { 0 };
+        return MethodType::MethodGeneric(idx);
     }
     MethodType::Base(Box::new(il2cpp_type_to_base_method(il2cpp_type, types, type_map, resolution, ctx)))
 }

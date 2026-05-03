@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
 </p>
 
-<h1 align="center">🛡️ Rodroid Il2CppDumper V4</h1>
+<h1 align="center">🛡️ Rodroid Il2CppDumper V5</h1>
 
 <p align="center">
   <b>A blazing-fast, cross-platform IL2CPP binary dumper written in Rust.</b><br/>
@@ -38,6 +38,15 @@
 | **Control Flow Graph (CFG) Analysis** | ❌ No | ❌ No | ✅ **Yes** |
 | **Metadata Annotations (strings, types, vtable)** | ❌ No | ❌ No | ✅ **Yes** |
 | **Semantic Variable Tracking** | ❌ No | ❌ No | ✅ **Yes** |
+| **Forward Constant Propagation** | ❌ No | ❌ No | ✅ **Yes** |
+| **Backward Slicing (Vtable Resolution)** | ❌ No | ⚠️ Partial (Cpp2IL) | ✅ **Yes** |
+| **Init-Check Folding** | ❌ No | ❌ No | ✅ **Yes** |
+| **String Literal Indirect Resolution (`il2cpp_string_new_wrapper`)** | ❌ No | ❌ No | ✅ **Yes** |
+| **Generic Instantiation Tracking** | ❌ No | ❌ No | ✅ **Yes** |
+| **Switch Table Reconstruction** | ❌ No | ❌ No | ✅ **Yes** |
+| **Boxing/Unboxing Pattern Detection** | ❌ No | ❌ No | ✅ **Yes** |
+| **Static Field Access Annotation** | ❌ No | ❌ No | ✅ **Yes** |
+| **CODM (Call of Duty Mobile) Support** | ❌ No | ❌ No | ✅ **Yes (Android + iOS, 32/64-bit)** |
 | **Fat Mach-O (Universal)** | ❌ No | ✅ Yes | ✅ Yes |
 | **WASM (WebGL)** | ✅ Yes | ✅ Yes | ✅ Yes |
 | **Dump file support** | ❌ No | ✅ Yes | ✅ Yes (+ ELF reload) |
@@ -99,6 +108,14 @@
 - **Control Flow Graph (CFG)** — Basic block detection, branch targets, loop back-edges, `if (condition)` reconstruction
 - **Metadata Annotations** — String literals, type info, method/field references, vtable resolution via `ADRP+LDR` patterns
 - **Semantic Variable Tracking** — Maps registers to parameter names (`X0` → `this`, `X1` → `arg0`)
+- **Forward Constant Propagation** — Tracks register values (MOVZ/MOVK/ADD/SUB/ORR/ADRP) across instructions to resolve register+register memory accesses like `LDR X0, [X22, X21, LSL #3]` into field names (e.g. `// this.<>2__current`). First IL2CPP tool to annotate indexed field accesses.
+- **Backward Slicing for Vtable Resolution** — On `BLR Xn`, walks backward through `LDR X8, [X0]` (klass) → `LDR X9, [X8, #N]` (vtable slot) chains to resolve indirect calls into `// virtual call: TypeName.MethodName` instead of opaque `sub_XXXXXX`.
+- **Initialization-Check Folding** — Detects and collapses `il2cpp_codegen_initialize_method`, `Il2CppCodeGenWriteBarrier`, and `TBZ/TBNZ`-on-bit-0 prologue patterns into a single `// [init check]` annotation, drastically reducing method-body noise.
+- **Indirect String Literal Resolution** — Tracks the literal index in `W0/W1` at `il2cpp_string_new_wrapper` call sites and resolves through `metadata_string_literals` to annotate the actual string content (`// "Hello, world"`).
+- **Generic Instantiation Tracking** — Resolves calls into `MethodInfo*` slots via `method_definition_method_specs` to annotate the concrete specialization (e.g. `// → List<int>.Add(this, item)`).
+- **Switch Table Reconstruction** — Detects ARM64 jump-table prologues (`ADRP+ADD+LDR Xn, [Xn, Xidx, lsl #2]+BR Xn`) using reg+reg propagation and emits `switch (var)` blocks in the CFG.
+- **Boxing / Unboxing Detection** — Annotates `il2cpp_codegen_box` / `il2cpp_unbox` call sites with the resolved boxed type from the first-arg type pointer.
+- **Static Field Access Annotation** — Resolves the `ADRP+ADD → LDR X8, [Xklass, #static_fields_offset] → LDR Wd, [X8, #field_offset]` pattern into `// SomeClass.staticField` using the existing klass identification map.
 - **Configurable** — Toggle hex bytes, field names, annotations, CFG independently
 
 ### Supported Platforms
@@ -117,6 +134,13 @@
 - Latest undocumented formats: `v104`, `v106`
 - Auto XOR metadata decryption (1-byte, 4-byte, 8-byte, rolling, position-dependent, header-only)
 - Manual version override via config
+
+### CODM (Call of Duty Mobile)
+- Custom v23 metadata layout with two-slot `type_definitions_count` fingerprint anchor
+- Android packed relocations (`DT_ANDROID_RELA` / `DT_ANDROID_REL`, APS2 + SLEB128) for 32-bit and 64-bit ELF
+- iOS chained fixups (`LC_DYLD_CHAINED_FIXUPS`) and legacy rebase opcodes (`LC_DYLD_INFO_ONLY`) for 32-bit and 64-bit Mach-O
+- Pointer formats: `DYLD_CHAINED_PTR_64`, `_64_OFFSET`, ARM64E variants
+- Toggle via `--codm` flag or `Codm: true` in config — additive code path, leaves standard Unity games untouched
 
 ### Search Strategies
 - **SectionHelper** — Format-aware section scanning
@@ -179,7 +203,7 @@ il2cpp_dumper UnityFramework global-metadata.dat
     ╦╦  ╔═╗╔═╗╔═╗  ╔╦╗╦ ╦╔╦╗╔═╗╔═╗╦═╗
     ║║  ╠═╝║  ╠═╝   ║║║ ║║║║╠═╝║╣ ╠╦╝
     ╩╩═╝╚  ╚═╝╩    ═╩╝╚═╝╩ ╩╩  ╚═╝╩╚═
-    Version v0.4.0
+    Version v0.4.1
   ─────────────────────────────────────
 
   📂 Output .\Dump0

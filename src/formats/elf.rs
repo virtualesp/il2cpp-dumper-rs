@@ -4,6 +4,26 @@ use crate::search::{SectionHelper, SearchSection};
 use crate::error::{Error, Result};
 use crate::il2cpp::structures::*;
 
+fn read_sleb128(stream: &mut BinaryStream) -> Result<i64> {
+    let mut result: i64 = 0;
+    let mut shift: u32 = 0;
+    loop {
+        let byte = stream.read_u8()?;
+        let low = (byte & 0x7F) as i64;
+        result |= low << shift;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            if shift < 64 && (byte & 0x40) != 0 {
+                result |= -(1i64 << shift);
+            }
+            return Ok(result);
+        }
+        if shift >= 64 {
+            return Err(Error::InvalidFormat("sleb128 overflow".into()));
+        }
+    }
+}
+
 pub const PT_NULL: u32 = 0;
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
@@ -107,6 +127,7 @@ pub struct Elf {
     pub stream: BinaryStream,
     pub is_32bit: bool,
     pub is_dumped: bool,
+    pub codm_diag: bool,
     pub header: ElfHeader,
     pub segments: Vec<ElfPhdr>,
     dynamic: Vec<ElfDyn>,
@@ -143,6 +164,7 @@ impl Elf {
             stream: BinaryStream::new(data),
             is_32bit,
             is_dumped: false,
+            codm_diag: false,
             header: ElfHeader::default(),
             segments: Vec::new(),
             dynamic: Vec::new(),
@@ -174,6 +196,52 @@ impl Elf {
         };
         elf.stream.is_32bit = is_32bit;
         let _ = elf.load();
+        Ok(elf)
+    }
+
+    pub fn new_with_codm_diag(data: Vec<u8>, is_32bit: bool, codm_diag: bool) -> Result<Self> {
+        let mut elf = Self::new_unloaded(data, is_32bit)?;
+        elf.codm_diag = codm_diag;
+        let _ = elf.load();
+        Ok(elf)
+    }
+
+    fn new_unloaded(data: Vec<u8>, is_32bit: bool) -> Result<Self> {
+        let mut elf = Self {
+            stream: BinaryStream::new(data),
+            is_32bit,
+            is_dumped: false,
+            codm_diag: false,
+            header: ElfHeader::default(),
+            segments: Vec::new(),
+            dynamic: Vec::new(),
+            symbols: Vec::new(),
+            sections: Vec::new(),
+            code_registration: None,
+            metadata_registration: None,
+            method_pointers: Vec::new(),
+            generic_method_pointers: Vec::new(),
+            invoker_pointers: Vec::new(),
+            custom_attribute_generators: Vec::new(),
+            reverse_pinvoke_wrappers: Vec::new(),
+            unresolved_virtual_call_pointers: Vec::new(),
+            types: Vec::new(),
+            type_dic: HashMap::new(),
+            metadata_usages: Vec::new(),
+            field_offsets: Vec::new(),
+            field_offsets_are_pointers: false,
+            generic_inst_pointers: Vec::new(),
+            generic_insts: Vec::new(),
+            generic_method_table: Vec::new(),
+            method_specs: Vec::new(),
+            method_definition_method_specs: HashMap::new(),
+            method_spec_generic_method_pointers: HashMap::new(),
+            code_gen_modules: HashMap::new(),
+            code_gen_module_method_pointers: HashMap::new(),
+            rgctxs_dictionary: HashMap::new(),
+            metadata_usages_count: 0,
+        };
+        elf.stream.is_32bit = is_32bit;
         Ok(elf)
     }
 
@@ -397,6 +465,162 @@ impl Elf {
         } else {
             self.process_rela_relocations()?;
         }
+        if self.codm_diag {
+            let _ = self.process_android_packed_relocations();
+        }
+        Ok(())
+    }
+
+    fn process_android_packed_relocations(&mut self) -> Result<()> {
+        const DT_ANDROID_REL: i64 = 0x6000000F;
+        const DT_ANDROID_RELSZ: i64 = 0x60000010;
+        const DT_ANDROID_RELA: i64 = 0x60000011;
+        const DT_ANDROID_RELASZ: i64 = 0x60000012;
+
+        let (rel_un, rel_sz, has_addend) = if let Some(e) = self.find_dynamic_entry(DT_ANDROID_RELA) {
+            let sz = self.find_dynamic_entry(DT_ANDROID_RELASZ).map(|s| s.d_un).unwrap_or(0);
+            (e.d_un, sz, true)
+        } else if let Some(e) = self.find_dynamic_entry(DT_ANDROID_REL) {
+            let sz = self.find_dynamic_entry(DT_ANDROID_RELSZ).map(|s| s.d_un).unwrap_or(0);
+            (e.d_un, sz, false)
+        } else {
+            return Ok(());
+        };
+        if rel_sz == 0 {
+            return Ok(());
+        }
+
+        let table_offset = self.map_vatr(rel_un)?;
+        let table_end = table_offset + rel_sz;
+        if table_end as usize > self.stream.data().len() {
+            return Ok(());
+        }
+
+        if rel_sz < 4
+            || self.stream.data()[table_offset as usize] != b'A'
+            || self.stream.data()[table_offset as usize + 1] != b'P'
+            || self.stream.data()[table_offset as usize + 2] != b'S'
+            || self.stream.data()[table_offset as usize + 3] != b'2'
+        {
+            return Ok(());
+        }
+
+        self.stream.set_position(table_offset + 4);
+
+        let group_count = read_sleb128(&mut self.stream)?;
+        if group_count <= 0 {
+            return Ok(());
+        }
+        let mut offset = read_sleb128(&mut self.stream)? as i64;
+        let mut addend: i64 = 0;
+        let symbols = self.symbols.clone();
+        let is_aarch64 = self.header.e_machine == EM_AARCH64;
+        let is_x86_64 = self.header.e_machine == EM_X86_64;
+
+        let mut applied = 0usize;
+        let mut unrecognized = 0usize;
+        let mut map_failed = 0usize;
+        let mut total = 0usize;
+
+        const RELOCATION_GROUPED_BY_INFO_FLAG: i64 = 1;
+        const RELOCATION_GROUPED_BY_OFFSET_DELTA_FLAG: i64 = 2;
+        const RELOCATION_GROUPED_BY_ADDEND_FLAG: i64 = 4;
+        const RELOCATION_GROUP_HAS_ADDEND_FLAG: i64 = 8;
+
+        for _ in 0..group_count {
+            let group_size = read_sleb128(&mut self.stream)?;
+            if group_size <= 0 {
+                break;
+            }
+            let group_flags = read_sleb128(&mut self.stream)?;
+            let group_offset_delta = if group_flags & RELOCATION_GROUPED_BY_OFFSET_DELTA_FLAG != 0 {
+                read_sleb128(&mut self.stream)?
+            } else {
+                0
+            };
+            let mut group_r_info = if group_flags & RELOCATION_GROUPED_BY_INFO_FLAG != 0 {
+                read_sleb128(&mut self.stream)?
+            } else {
+                0
+            };
+            if group_flags & RELOCATION_GROUPED_BY_ADDEND_FLAG != 0
+                && group_flags & RELOCATION_GROUP_HAS_ADDEND_FLAG != 0
+            {
+                addend = addend.wrapping_add(read_sleb128(&mut self.stream)?);
+            } else if group_flags & RELOCATION_GROUP_HAS_ADDEND_FLAG == 0 {
+                addend = 0;
+            }
+
+            for _ in 0..group_size {
+                offset = offset.wrapping_add(if group_flags & RELOCATION_GROUPED_BY_OFFSET_DELTA_FLAG != 0 {
+                    group_offset_delta
+                } else {
+                    read_sleb128(&mut self.stream)?
+                });
+
+                let r_info = if group_flags & RELOCATION_GROUPED_BY_INFO_FLAG == 0 {
+                    let v = read_sleb128(&mut self.stream)?;
+                    group_r_info = v;
+                    v
+                } else {
+                    group_r_info
+                };
+
+                if has_addend
+                    && group_flags & RELOCATION_GROUPED_BY_ADDEND_FLAG == 0
+                    && group_flags & RELOCATION_GROUP_HAS_ADDEND_FLAG != 0
+                {
+                    addend = addend.wrapping_add(read_sleb128(&mut self.stream)?);
+                } else if !has_addend {
+                    addend = 0;
+                }
+
+                total += 1;
+                let rel_type = (r_info & 0xFFFFFFFF) as u32;
+                let sym_idx = ((r_info as u64) >> 32) as usize;
+                let r_offset = offset as u64;
+                let r_addend = addend;
+
+                let value: Option<u64> = if is_aarch64 {
+                    if rel_type == R_AARCH64_ABS64 && sym_idx < symbols.len() {
+                        Some((symbols[sym_idx].st_value as i64 + r_addend) as u64)
+                    } else if rel_type == R_AARCH64_RELATIVE {
+                        Some(r_addend as u64)
+                    } else {
+                        None
+                    }
+                } else if is_x86_64 {
+                    if rel_type == R_X86_64_64 && sym_idx < symbols.len() {
+                        Some((symbols[sym_idx].st_value as i64 + r_addend) as u64)
+                    } else if rel_type == R_X86_64_RELATIVE {
+                        Some(r_addend as u64)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(val) = value {
+                    let saved = self.stream.position();
+                    match self.map_vatr(r_offset) {
+                        Ok(write_offset) => {
+                            self.stream.set_position(write_offset);
+                            self.stream.write_u64(val)?;
+                            self.stream.set_position(saved);
+                            applied += 1;
+                        }
+                        Err(_) => {
+                            map_failed += 1;
+                        }
+                    }
+                } else {
+                    unrecognized += 1;
+                }
+            }
+        }
+
+        let _ = (total, applied, unrecognized, map_failed);
         Ok(())
     }
 
@@ -454,6 +678,10 @@ impl Elf {
         let is_x86_64 = self.header.e_machine == EM_X86_64;
         let symbols = self.symbols.clone();
 
+        let mut applied = 0usize;
+        let mut unrecognized = 0usize;
+        let mut map_failed = 0usize;
+
         for _ in 0..count {
             let r_offset = self.stream.read_u64()?;
             let r_info = self.stream.read_u64()?;
@@ -484,13 +712,22 @@ impl Elf {
 
             if let Some(val) = value {
                 let saved = self.stream.position();
-                if let Ok(write_offset) = self.map_vatr(r_offset) {
-                    self.stream.set_position(write_offset);
-                    self.stream.write_u64(val)?;
-                    self.stream.set_position(saved);
+                match self.map_vatr(r_offset) {
+                    Ok(write_offset) => {
+                        self.stream.set_position(write_offset);
+                        self.stream.write_u64(val)?;
+                        self.stream.set_position(saved);
+                        applied += 1;
+                    }
+                    Err(_) => {
+                        map_failed += 1;
+                    }
                 }
+            } else {
+                unrecognized += 1;
             }
         }
+        let _ = (applied, unrecognized, map_failed);
         Ok(())
     }
 
@@ -793,6 +1030,10 @@ impl Elf {
 
     fn load_pointers(&mut self, cr: &Il2CppCodeRegistration, mr: &Il2CppMetadataRegistration) -> Result<()> {
         let version = self.stream.version;
+
+        if version <= 24.1 && cr.method_pointers > 0 && cr.method_pointers_count > 0 {
+            self.method_pointers = self.map_vatr_array(cr.method_pointers, cr.method_pointers_count)?;
+        }
 
         if cr.generic_method_pointers_count > 0 {
             self.generic_method_pointers = self.map_vatr_array(cr.generic_method_pointers, cr.generic_method_pointers_count)?;

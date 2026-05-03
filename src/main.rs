@@ -9,7 +9,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use il2cpp_dumper::config::Config;
 use il2cpp_dumper::error::Result;
-use il2cpp_dumper::il2cpp::metadata::Metadata;
+use il2cpp_dumper::il2cpp::metadata::{Metadata, MetadataVariant};
 use il2cpp_dumper::il2cpp::base::{Il2Cpp, VaSegment};
 use il2cpp_dumper::executor::Il2CppExecutor;
 use il2cpp_dumper::output::decompiler::Il2CppDecompiler;
@@ -366,7 +366,11 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
     let is_64 = data.len() > 4 && data[4] == 2;
     print_detection(&format!("ELF{} format", if is_64 { "64" } else { "32" }));
 
-    let mut elf = Elf::new(data, !is_64)?;
+    let mut elf = if metadata.variant == MetadataVariant::Codm {
+        Elf::new_with_codm_diag(data, !is_64, true)?
+    } else {
+        Elf::new(data, !is_64)?
+    };
 
     let version = if config.force_il2cpp_version {
         config.force_version
@@ -394,7 +398,11 @@ fn init_elf(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
 
     let mut helper = elf.get_section_helper(method_count, type_count, image_count);
     let code_reg = helper.find_code_registration();
-    let metadata_reg = helper.find_metadata_registration();
+    let metadata_reg = if metadata.variant == MetadataVariant::Codm {
+        helper.find_metadata_registration_codm().or_else(|| helper.find_metadata_registration())
+    } else {
+        helper.find_metadata_registration()
+    };
     sp.finish_and_clear();
 
     if let Some(cr) = code_reg {
@@ -567,7 +575,11 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
     let is_64 = magic == MAGIC_MACHO64;
     print_detection(&format!("Mach-O {} format", if is_64 { "64-bit" } else { "32-bit" }));
 
-    let mut macho = MachO::new(data, !is_64)?;
+    let mut macho = if metadata.variant == MetadataVariant::Codm {
+        MachO::new_with_codm_fixups(data, !is_64, true)?
+    } else {
+        MachO::new(data, !is_64)?
+    };
 
     let version = if config.force_il2cpp_version {
         config.force_version
@@ -610,7 +622,11 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
     if cr_addr == 0 || mr_addr == 0 {
         let mut helper = macho.get_section_helper(method_count, type_count, mu_count, image_count, version);
         let code_reg = helper.find_code_registration();
-        let metadata_reg = helper.find_metadata_registration();
+        let metadata_reg = if metadata.variant == MetadataVariant::Codm {
+            helper.find_metadata_registration_codm().or_else(|| helper.find_metadata_registration())
+        } else {
+            helper.find_metadata_registration()
+        };
         sp.finish_and_clear();
         if let (Some(cr), Some(mr)) = (code_reg, metadata_reg) {
             print_address("CodeRegistration", cr);
@@ -864,9 +880,10 @@ fn run() -> Result<()> {
     }
 
     let sp = spinner("Parsing metadata structures...");
-    let mut metadata = Metadata::new_with_unity_version(
+    let mut metadata = Metadata::new_with_options(
         metadata_bytes,
         unity_version_str.as_deref(),
+        config.codm,
     )?;
     sp.finish_and_clear();
     print_info("Metadata Version", &metadata.version.to_string());

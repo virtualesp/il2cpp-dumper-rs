@@ -41,6 +41,7 @@ pub struct Config {
     pub generate_unity_headers: bool,
     pub compiler_layout: String,
     pub use_topological_sort: bool,
+    pub codm: bool,
 }
 
 impl Default for Config {
@@ -84,6 +85,7 @@ impl Default for Config {
             generate_unity_headers: true,
             compiler_layout: "GCC".to_string(),
             use_topological_sort: true,
+            codm: false,
         }
     }
 }
