@@ -165,14 +165,14 @@ impl Il2CppExecutor {
                                 il2cpp.stream.set_position(offset);
                                 Il2CppGenericClass::read(&mut il2cpp.stream, il2cpp.version)
                             }
-                            Err(_) => return "UnknownType".to_string(),
+                            Err(_) => return "object".to_string(),
                         };
                         match gc_result {
                             Ok(gc) => {
                                 self.generic_class_cache.insert(gc_addr, gc.clone());
                                 gc
                             }
-                            Err(_) => return "UnknownType".to_string(),
+                            Err(_) => return "object".to_string(),
                         }
                     };
 
@@ -185,7 +185,7 @@ impl Il2CppExecutor {
 
                 let type_def = match type_def_opt {
                     Some(td) => td,
-                    None => return "UnknownType".to_string(),
+                    None => return "object".to_string(),
                 };
 
                 if type_def.declaring_type_index != -1 {
@@ -254,7 +254,15 @@ impl Il2CppExecutor {
                         return name.to_string();
                     }
                 }
-                format!("UnknownType(0x{:X})", il2cpp_type.type_enum)
+                let masked = il2cpp_type.type_enum & 0x7F;
+                if masked != il2cpp_type.type_enum {
+                    if let Some(te) = Il2CppTypeEnum::from_u8(masked) {
+                        if let Some(name) = te.type_name() {
+                            return name.to_string();
+                        }
+                    }
+                }
+                "object".to_string()
             }
         }
     }

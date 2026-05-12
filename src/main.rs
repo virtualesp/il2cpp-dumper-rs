@@ -523,6 +523,7 @@ fn init_pe(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cpp
     il2cpp.va_segments = va_segments;
     il2cpp.image_base = pe_image_base;
     il2cpp.is_pe = true;
+    il2cpp.codm = config.codm;
     il2cpp.arch = Some(if pe.is_32bit {
         il2cpp_dumper::disassembler::Architecture::X86
     } else {
@@ -654,6 +655,7 @@ fn init_macho(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2
 
     let mut il2cpp = Il2Cpp::new(macho.stream.clone(), version, macho.is_32bit);
     il2cpp.va_segments = va_segments;
+    il2cpp.codm = config.codm;
     il2cpp.init(cr_addr, mr_addr, &|addr| macho.map_vatr(addr))?;
 
     if macho.is_32bit {
@@ -712,6 +714,7 @@ fn init_nso(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2Cp
     let stream_len = nso.stream.data().len() as u64;
     let mut il2cpp = Il2Cpp::new(nso.stream.clone(), version, nso.is_32bit);
     il2cpp.va_segments = vec![VaSegment { vaddr: 0, memsz: stream_len, offset: 0 }];
+    il2cpp.codm = config.codm;
     il2cpp.init(cr_addr, mr_addr, &|addr| nso.map_vatr(addr))?;
 
     if let Ok(nso_exports) = nso.list_exported_symbols() {
@@ -762,6 +765,7 @@ fn init_wasm(data: Vec<u8>, metadata: &Metadata, config: &Config) -> Result<Il2C
     let stream_len = wasm.stream.data().len() as u64;
     let mut il2cpp = Il2Cpp::new(wasm.stream.clone(), version, wasm.is_32bit);
     il2cpp.va_segments = vec![VaSegment { vaddr: 0, memsz: stream_len, offset: 0 }];
+    il2cpp.codm = config.codm;
     il2cpp.init(cr_addr, mr_addr, &|addr| wasm.map_vatr(addr))?;
     Ok(il2cpp)
 }

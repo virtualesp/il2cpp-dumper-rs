@@ -359,17 +359,30 @@ impl MachO {
     }
 
     pub fn map_vatr(&self, addr: u64) -> Result<u64> {
-        for sect in &self.sections {
-            if addr >= sect.addr && addr <= sect.addr + sect.size {
-                if sect.sectname == "__bss" {
-                    continue;
+        let try_addr = |a: u64| -> Option<u64> {
+            for sect in &self.sections {
+                if a >= sect.addr && a <= sect.addr + sect.size {
+                    if sect.sectname == "__bss" {
+                        continue;
+                    }
+                    return Some(a - sect.addr + sect.offset as u64);
                 }
-                return Ok(addr - sect.addr + sect.offset as u64);
             }
+            for seg in &self.segments {
+                if a >= seg.vmaddr && a < seg.vmaddr + seg.vmsize {
+                    return Some(a - seg.vmaddr + seg.fileoff);
+                }
+            }
+            None
+        };
+        if let Some(off) = try_addr(addr) {
+            return Ok(off);
         }
-        for seg in &self.segments {
-            if addr >= seg.vmaddr && addr < seg.vmaddr + seg.vmsize {
-                return Ok(addr - seg.vmaddr + seg.fileoff);
+        if self.codm_apply_fixups && (addr >> 52) != 0 {
+            let target_low = addr & 0x0000_000F_FFFF_FFFF;
+            let fixed = target_low.wrapping_add(self.vmaddr);
+            if let Some(off) = try_addr(fixed) {
+                return Ok(off);
             }
         }
         Err(Error::AddressNotMapped(addr))
@@ -736,21 +749,33 @@ impl MachO {
             page_starts.push(self.stream.read_u16()?);
         }
 
+        let seg_file_off = match self.segments.iter().find(|s| s.vmaddr == segment_offset || s.fileoff == segment_offset) {
+            Some(s) => s.fileoff,
+            None => self.segments.iter()
+                .min_by_key(|s| if s.vmaddr >= segment_offset { s.vmaddr - segment_offset } else { u64::MAX })
+                .map(|s| s.fileoff)
+                .unwrap_or(0),
+        };
+        let seg_vmaddr = self.segments.iter()
+            .find(|s| s.fileoff == seg_file_off)
+            .map(|s| s.vmaddr)
+            .unwrap_or(self.vmaddr);
+        let _ = seg_vmaddr;
+
         const DYLD_CHAINED_PTR_START_NONE: u16 = 0xFFFF;
 
         for (page_index, &start) in page_starts.iter().enumerate() {
             if start == DYLD_CHAINED_PTR_START_NONE {
                 continue;
             }
-            let page_va_base = segment_offset + (page_index as u64) * (page_size as u64);
-            let mut chain_va = page_va_base + start as u64;
+            let page_file_base = seg_file_off + (page_index as u64) * (page_size as u64);
+            let mut chain_off = page_file_base + start as u64;
 
             loop {
-                let file_off = match self.map_vatr(chain_va) {
-                    Ok(v) => v,
-                    Err(_) => break,
-                };
-                self.stream.set_position(file_off);
+                if chain_off >= self.stream.data().len() as u64 {
+                    break;
+                }
+                self.stream.set_position(chain_off);
                 let raw = self.stream.read_u64()?;
 
                 let (target, next, stride) = decode_chained_pointer(raw, pointer_format);
@@ -758,16 +783,14 @@ impl MachO {
                     if is_offset_format(pointer_format) {
                         rebased_va = rebased_va.wrapping_add(self.vmaddr);
                     }
-                    let saved = self.stream.position();
-                    self.stream.set_position(file_off);
+                    self.stream.set_position(chain_off);
                     self.stream.write_u64(rebased_va)?;
-                    self.stream.set_position(saved);
                 }
 
                 if next == 0 {
                     break;
                 }
-                chain_va = chain_va.wrapping_add((next as u64).wrapping_mul(stride as u64));
+                chain_off = chain_off.wrapping_add((next as u64).wrapping_mul(stride as u64));
             }
         }
 
@@ -1005,13 +1028,10 @@ fn decode_chained_pointer(raw: u64, pointer_format: u16) -> (Option<u64>, u32, u
             if bind != 0 {
                 (None, next, 8)
             } else if auth != 0 {
-                let target = raw & 0xFFFF_FFFF;
-                (Some(target), next, 8)
+                (Some(raw & 0xFFFF_FFFF), next, 8)
             } else {
-                let high8 = (raw >> 36) & 0xFF;
-                let target_low = raw & 0x0000_000F_FFFF_FFFF;
-                let target = target_low | (high8 << 56);
-                (Some(target & 0x00FF_FFFF_FFFF_FFFF), next, 8)
+                let target = raw & 0x0000_000F_FFFF_FFFF;
+                (Some(target), next, 8)
             }
         }
         _ => (None, 0, 4),

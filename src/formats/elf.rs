@@ -1069,13 +1069,25 @@ impl Elf {
         self.types.clear();
         self.type_dic.clear();
 
+        let mut decoded = 0usize;
         for (idx, ptr) in type_pointers.iter().enumerate() {
             let offset = self.map_vatr(*ptr)?;
             self.stream.set_position(offset);
             let mut il2cpp_type = Il2CppType::read(&mut self.stream)?;
-            il2cpp_type.init(version);
+            if self.codm_diag {
+                let pre = il2cpp_type.type_enum;
+                il2cpp_type.init_codm(version);
+                if pre != il2cpp_type.type_enum {
+                    decoded += 1;
+                }
+            } else {
+                il2cpp_type.init(version);
+            }
             self.types.push(il2cpp_type);
             self.type_dic.insert(*ptr, idx);
+        }
+        if self.codm_diag {
+            eprintln!("[CODM] init_codm decoded {} of {} Il2CppType entries", decoded, type_pointers.len());
         }
 
         self.field_offsets_are_pointers = version > 21.0;

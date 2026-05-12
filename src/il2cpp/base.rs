@@ -54,6 +54,7 @@ pub struct Il2Cpp {
     pub e_machine: u16,
     pub exported_symbols: Vec<String>,
     pub api_export_rvas: HashMap<String, u64>,
+    pub codm: bool,
 }
 
 impl Il2Cpp {
@@ -94,6 +95,7 @@ impl Il2Cpp {
             e_machine: 0,
             exported_symbols: Vec::new(),
             api_export_rvas: HashMap::new(),
+            codm: false,
         }
     }
 
@@ -150,6 +152,7 @@ impl Il2Cpp {
             e_machine: elf.header.e_machine,
             exported_symbols: Vec::new(),
             api_export_rvas: HashMap::new(),
+            codm: elf.codm_diag,
         }
     }
 
@@ -183,7 +186,11 @@ impl Il2Cpp {
             let t_offset = map_vatr(*ptr).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("type[{}] ptr=0x{:x}: {}", idx, ptr, e)))?;
             self.stream.set_position(t_offset);
             let mut t = Il2CppType::read(&mut self.stream)?;
-            t.init(self.version);
+            if self.codm {
+                t.init_codm(self.version);
+            } else {
+                t.init(self.version);
+            }
             self.types.push(t);
             self.type_dic.insert(*ptr, idx);
         }

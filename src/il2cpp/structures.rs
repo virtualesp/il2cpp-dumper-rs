@@ -1858,6 +1858,8 @@ impl Il2CppMetadataRegistration {
     }
 }
 
+pub const CODM_TYPE_ENUM_KEY: u8 = 0x35;
+
 #[derive(Debug, Clone, Default)]
 pub struct Il2CppType {
     pub datapoint: u64,
@@ -1897,6 +1899,25 @@ impl Il2CppType {
             self.byref = ((self.bits >> 30) & 1) as u8;
             self.pinned = (self.bits >> 31) as u8;
         }
+    }
+
+    pub fn init_codm(&mut self, version: f64) {
+        let b2 = ((self.bits >> 16) & 0xFF) as u8;
+        let b3 = ((self.bits >> 24) & 0xFF) as u8;
+        let dp_hi = (self.datapoint >> 32) as u32;
+        let xor_te = b2 ^ CODM_TYPE_ENUM_KEY;
+        let xor_te_valid = matches!(xor_te,
+            0x01..=0x16 | 0x18 | 0x19 | 0x1B..=0x21 | 0x40 | 0x41 | 0x45 | 0x55 | 0xFF);
+        let cur_te_valid = matches!(b2,
+            0x01..=0x16 | 0x18 | 0x19 | 0x1B..=0x21 | 0x40 | 0x41 | 0x45 | 0x55 | 0xFF);
+        let marker = (b3 & 0x1F) == (CODM_TYPE_ENUM_KEY & 0x1F)
+            || dp_hi == 0x35353535
+            || (!cur_te_valid && xor_te_valid);
+        if marker {
+            self.bits ^= 0x35353535;
+            self.datapoint ^= 0x3535353535353535;
+        }
+        self.init(version);
     }
 
     pub fn klass_index(&self) -> u64 {
